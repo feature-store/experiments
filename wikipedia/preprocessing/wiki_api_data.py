@@ -7,7 +7,7 @@ from collections import defaultdict
 import subprocess
 
 import configparser
-import argparse 
+import argparse
 
 import pandas as pd
 import numpy as np
@@ -429,10 +429,11 @@ def generate_simulation_data(
     open(stream_questions_file, "w").write(json.dumps(questions))
     open(init_data_file, "w").write(json.dumps(init_data))
 
+
 def search_answer(rev_file, embedding_dir, question):
     # read file and see if answer is contained
     revid = rev_file.replace(".json", "").split("_")[0]
-    #assert str(revid) == str(question["revid"]), f"Invalid id {revid}, {question}"
+    # assert str(revid) == str(question["revid"]), f"Invalid id {revid}, {question}"
     embedding_filename = os.path.join(embedding_dir, f"{revid}_new.pkl")
     try:
         passages = pickle.load(open(embedding_filename, "rb"))["passages"]
@@ -440,13 +441,12 @@ def search_answer(rev_file, embedding_dir, question):
         print(e)
         print("File error", embedding_filename)
         return False
-    
+
     found_answer = False
-    for passage in passages: 
-        if question["answer"] in passage: 
+    for passage in passages:
+        if question["answer"] in passage:
             found_answer = True
     return found_answer
-
 
 
 def check_dataset(
@@ -476,7 +476,7 @@ def check_dataset(
                 print("missing doc", doc_id)
                 continue
             for question in questions[ts][doc_id]:
-                #print(question)
+                # print(question)
                 answer = question["answer"]
                 # import pdb; pdb.set_trace()
 
@@ -498,7 +498,7 @@ def check_dataset(
                         if rev_file in edits[ts - i][doc_id]:
                             found = True
                             revision_file = rev_file
-                            found_index = ts-i
+                            found_index = ts - i
                             break
                 if not found:
                     # only option is that it was derived from original doc
@@ -509,25 +509,28 @@ def check_dataset(
 
                 # search for answer in revision file
                 found_answer = search_answer(revision_file, embedding_dir, question)
-                if not found_answer: 
+                if not found_answer:
                     print("NOT FOUND", found_answer, revision_file)
                 else:
                     print("FOUND", found_answer, revision_file)
 
-
-
-                if question["question"] == "how far is hurricane ida from cuba?????????????????":
+                if (
+                    question["question"]
+                    == "how far is hurricane ida from cuba?????????????????"
+                ):
                     print("DEBUG", question)
                     print(rev_file)
                     print("question ts", ts, "edit ts", found_index)
-                    for i in range(found_index, ts+1, 1): 
+                    for i in range(found_index, ts + 1, 1):
                         if doc_id in edits[i]:
-                            print(i, edits[i][doc_id], search_answer(edits[i][doc_id][-1], embedding_dir, question))
+                            print(
+                                i,
+                                edits[i][doc_id],
+                                search_answer(
+                                    edits[i][doc_id][-1], embedding_dir, question
+                                ),
+                            )
                     print(found_answer)
-
-
-
-
 
     # docid_to_title = {}
     # for index, row in edits_df.iterrows():
@@ -556,41 +559,52 @@ if __name__ == "__main__":
 
     # argument flags
     parser = argparse.ArgumentParser()
-    parser.add_argument('--run_query_recentchanges', action='store_true', default=False)  # query wiki api for recentchanges
-    parser.add_argument('--run_query_doc_versions', action='store_true', default=False)  # query wiki api for doc versions
-    parser.add_argument('--run_recent_changes', action='store_true', default=False)  # re-processing api changes data
-    parser.add_argument('--run_parse_docs', action='store_true', default=False)  # re-parse document versions
-    parser.add_argument('--run_get_questions', action='store_true', default=False)
-    parser.add_argument('--run_generate_diffs', action='store_true', default=False)  # re-process generating diffs
-    parser.add_argument('--run_generate_simulation_data', action='store_true', default=False) 
-    parser.add_argument('--run_check_dataset', action='store_true', default=False)
-    parser.add_argument('--run_generate_embeddings', action='store_true', default=False)
+    parser.add_argument(
+        "--run_query_recentchanges", action="store_true", default=False
+    )  # query wiki api for recentchanges
+    parser.add_argument(
+        "--run_query_doc_versions", action="store_true", default=False
+    )  # query wiki api for doc versions
+    parser.add_argument(
+        "--run_recent_changes", action="store_true", default=False
+    )  # re-processing api changes data
+    parser.add_argument(
+        "--run_parse_docs", action="store_true", default=False
+    )  # re-parse document versions
+    parser.add_argument("--run_get_questions", action="store_true", default=False)
+    parser.add_argument(
+        "--run_generate_diffs", action="store_true", default=False
+    )  # re-process generating diffs
+    parser.add_argument(
+        "--run_generate_simulation_data", action="store_true", default=False
+    )
+    parser.add_argument("--run_check_dataset", action="store_true", default=False)
+    parser.add_argument("--run_generate_embeddings", action="store_true", default=False)
     args = parser.parse_args()
 
-
     # directories
-    data_dir = config['directory']['data_dir']
-    revisions_dir = config['directory']['revisions_dir']
-    raw_doc_dir = config['directory']['raw_doc_dir']
-    parsed_doc_dir = config['directory']['parsed_doc_dir']
-    parsed_tmp_dir = config['directory']['parsed_tmp_dir'] 
-    diff_dir = config['directory']['diff_dir']
-    embedding_dir = config['directory']['embedding_dir']
-    
+    data_dir = config["directory"]["data_dir"]
+    revisions_dir = config["directory"]["revisions_dir"]
+    raw_doc_dir = config["directory"]["raw_doc_dir"]
+    parsed_doc_dir = config["directory"]["parsed_doc_dir"]
+    parsed_tmp_dir = config["directory"]["parsed_tmp_dir"]
+    diff_dir = config["directory"]["diff_dir"]
+    embedding_dir = config["directory"]["embedding_dir"]
+
     # intermediate files
-    model_file = config['files']['model_file']
-    changes_file = config['files']['changes_file']
-    titles_file = config['files']['titles_file']
-    revisions_file = config['files']['revisions_file']
-    edits_file = config['files']['edits_file']
-    raw_questions_file = config['files']['raw_questions_file']
-    questions_file = config['files']['questions_file']
-    pageview_file = config['files']['pageview_file']
+    model_file = config["files"]["model_file"]
+    changes_file = config["files"]["changes_file"]
+    titles_file = config["files"]["titles_file"]
+    revisions_file = config["files"]["revisions_file"]
+    edits_file = config["files"]["edits_file"]
+    raw_questions_file = config["files"]["raw_questions_file"]
+    questions_file = config["files"]["questions_file"]
+    pageview_file = config["files"]["pageview_file"]
 
     # simulation data
-    init_data_file = config['simulation']['init_data_file']
-    stream_edits_file = config['simulation']['stream_edits_file']
-    stream_questions_file = config['simulation']['stream_questions_file']
+    init_data_file = config["simulation"]["init_data_file"]
+    stream_edits_file = config["simulation"]["stream_edits_file"]
+    stream_questions_file = config["simulation"]["stream_questions_file"]
 
     if args.run_query_recentchanges:
         query_edit_stream(start_time, end_time, revisions_dir)

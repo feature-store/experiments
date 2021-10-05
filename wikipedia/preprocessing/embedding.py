@@ -114,11 +114,11 @@ def generate_embeddings(model_file, diff_dir, embedding_dir):
 
     # loop through files
     index = 0
-    #gpu = 2
+    # gpu = 2
     for filename in tqdm(os.listdir(diff_dir)):
 
-        #index += 1
-        #if index % 5 != gpu:
+        # index += 1
+        # if index % 5 != gpu:
         #    continue
 
         new_id = filename.replace(".json", "").split("_")[0]

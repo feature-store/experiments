@@ -171,7 +171,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             continue
         sents = init_data[key]["sents"]
         revid = init_data[key]["revid"]
-   
+
         print(init_data_file)
         print(init_data[key]["file"])
         embedding_data = pickle.load(open(embedding_path(revid, version="_orig"), "rb"))
@@ -208,9 +208,9 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             print("task", task, version)
             rev_file = task[0]
             doc_id = task[1]
-            #doc_id = task[2]
-            #rev_file = task[3]
-            #if filter_keys and doc_id not in keys:
+            # doc_id = task[2]
+            # rev_file = task[3]
+            # if filter_keys and doc_id not in keys:
             #    continue
 
             data = json.load(open(os.path.join(rev_dir, rev_file)))
@@ -219,7 +219,9 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             sents = [d["sent_b"] for d in data["diffs"][0]]
             revid = rev_file.replace(".json", "").split("_")[0]
             embedding_filename = embedding_path(revid, version="_new")
-            assert os.path.exists(embedding_filename), f"Missing revid {embedding_filename}"
+            assert os.path.exists(
+                embedding_filename
+            ), f"Missing revid {embedding_filename}"
             if os.path.exists(embedding_filename):
                 embedding_data = pickle.load(
                     open(embedding_path(revid, version="_new"), "rb")
@@ -227,8 +229,10 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 # assert embedding_data["timestamp"] == timestamp
                 embeddings = embedding_data["embeddings"]
                 passages = embedding_data["passages"]
-                assert len(passages) == len(sents_to_passages(sents)), f"Inconsistent passage len {len(passages)}, {len(sents_to_passages(sents))}"
-                #passages = sents_to_passages(sents)
+                assert len(passages) == len(
+                    sents_to_passages(sents)
+                ), f"Inconsistent passage len {len(passages)}, {len(sents_to_passages(sents))}"
+                # passages = sents_to_passages(sents)
                 assert len(passages) == len(embeddings)
             else:
                 missing.add(doc_id)
@@ -290,7 +294,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             # not considered in edits
             if doc_id not in init_data:
                 print("missing", doc_id)
-                #print(init_data.keys())
+                # print(init_data.keys())
                 continue
 
             # loop through questions
@@ -351,8 +355,9 @@ def main():
     log_wandb = True
     if log_wandb:
         import wandb
+
         run = wandb.init(job_type="create_simulation_output")
-        artifact = wandb.Artifact(exp_id, type='dataset')
+        artifact = wandb.Artifact(exp_id, type="dataset")
         artifact.add_folder(output_dir)
 
 
