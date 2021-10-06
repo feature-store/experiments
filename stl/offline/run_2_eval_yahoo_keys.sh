@@ -8,7 +8,7 @@ do
     key=`basename $data`
     for slide in 6 12 18 24 48 96 168 192 336 672
     do
-        echo python stl_offline_eval.py --offline-yahoo-csv-path $data \
+        echo python evaluation.py --offline-yahoo-csv-path $data \
             --offline-plan-path ./result/offline_1_slide/plan/slide_${slide}_plan.json \
             --output-path ./result/offline_1_slide/plan_eval/slide_${slide}_key_${key} >> $tmp_script
     done
