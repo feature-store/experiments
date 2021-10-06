@@ -6,7 +6,7 @@ tmp_script=`mktemp`
 for data in `ls $data_dir/A4Benchmark-TS*`
 do
     key=`basename $data`
-    echo python stl_offline_eval.py --offline-yahoo-csv-path $data \
+    echo python evaluation.py --offline-yahoo-csv-path $data \
         --offline-run-oracle true \
         --output-path ./result/offline_1_slide/plan_eval/oracle_key_${key} >> $tmp_script
 done

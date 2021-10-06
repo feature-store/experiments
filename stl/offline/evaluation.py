@@ -1,4 +1,5 @@
 import argparse
+import os
 import bisect
 
 import numpy as np
@@ -117,11 +118,16 @@ def run_exp(csv_path, plan_path, output_path, run_oracle=False):
     if run_oracle:
         df = offline_oracle(csv_path)
     else:
-        df = offline_eval(csv_path, plan_path, run_oracle)
+        df = offline_eval(csv_path, plan_path)
     df.to_csv(output_path, index=None)
 
 
+def _ensure_dir(path):
+    os.makedirs(os.path.split(path)[0], exist_ok=True)
+
+
 def main():
+    # TODO(simon): migrate to gflags
     parser = argparse.ArgumentParser(description="Specify experiment config")
     parser.add_argument("--offline-yahoo-csv-path", type=str)
     parser.add_argument("--offline-plan-path", type=str)
@@ -132,6 +138,7 @@ def main():
     assert args.offline_yahoo_csv_path
     if not args.offline_run_oracle:
         assert args.offline_plan_path
+    _ensure_dir(args.output_path)
 
     run_exp(
         csv_path=args.offline_yahoo_csv_path,

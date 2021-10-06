@@ -1,4 +1,5 @@
 import json
+import os
 from pprint import pprint
 from typing import Dict
 
@@ -57,6 +58,12 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "output_path", None, "path to output json, if empty, print to stdout."
 )
+flags.DEFINE_string(
+    "per_key_slide_size_plan",
+    None,
+    "path to generated per key's window slide size config.",
+)
+flags.DEFINE_integer("num_mapper_replicas", None, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:
@@ -88,6 +95,7 @@ def main(argv):
         env,
         window_size=FLAGS.window_size,
         slide_size=FLAGS.slide_size,
+        per_key_slide_size_path=FLAGS.per_key_slide_size_plan,
         source_queue=source_to_window_queue,
         next_queues=windows_to_mapper_queue,
     )
@@ -97,12 +105,14 @@ def main(argv):
         model_run_time_s=FLAGS.model_runtime_s,
         # TODO(simon): customize this once we want different key selection policy
         key_selection_policy_cls=RoundRobinLoadBalancer,
+        num_replicas=FLAGS.num_mapper_replicas,
     )
     env.run(until=FLAGS.total_runtime_s)
 
     plan = m.plan
     config = _get_config()
     if FLAGS.output_path:
+        os.makedirs(os.path.split(FLAGS.output_path)[0], exist_ok=True)
         with open(FLAGS.output_path, "w") as f:
             json.dump(plan, f, indent=2)
         with open(FLAGS.output_path + ".config.json", "w") as f:

@@ -1,3 +1,4 @@
+import configparser
 from typing import List
 import pickle
 import shutil
@@ -44,17 +45,20 @@ Download require data:
 Upload results: 
     * exp_dir = s3://feature-store-datasets/wikipedia/simulation_output/
 """
-data_dir = "/data/wooders/wikipedia"
-rev_dir = f"{data_dir}/diffs/"
-embedding_dir = f"{data_dir}/embeddings/"
-exp_dir = f"{data_dir}/simulation_output/"
-model_file = f"{data_dir}/models/bert-base-encoder.cp"
-
 # simulation data
-# init_data_file = f"{data_dir}/init_data.json"
-init_data_file = f"{data_dir}/init_data.json"
-stream_edits_file = f"{data_dir}/edit_stream.json"
-stream_questions_file = f"{data_dir}/question_stream.json"
+
+config = configparser.ConfigParser()
+config.read("config.yml")
+plan_dir = config["simulation"]["plan_dir"]
+init_data_file = config["simulation"]["init_data_file"]
+stream_edits_file = config["simulation"]["stream_edits_file"]
+stream_questions_file = config["simulation"]["stream_questions_file"]
+
+data_dir = config['files']['data_dir']
+rev_dir = config['directory']['diff_dir'] 
+embedding_dir = config['directory']['embedding_dir'] 
+exp_dir = config['directory']['exp_dir'] 
+model_file = config['files']['model_file'] 
 
 # Create parser
 parser = argparse.ArgumentParser(description="Specify experiment config")
@@ -213,7 +217,6 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             # rev_file = task[3]
             # if filter_keys and doc_id not in keys:
             #    continue
-
             data = json.load(open(os.path.join(rev_dir, rev_file)))
             timestamp = data["timestamp"]
             title = data["title"]
@@ -355,7 +358,7 @@ def main():
         args.offline_plan_path
     )  # "wiki-plans/plan-fifo-always_process-1-0.001-60.json"
     exp_id = os.path.basename(plan_file).replace(".json", "")
-
+    
     output_dir = offline_eval(plan_file, exp_id, compute_embeddings=args.embed)
     log_wandb = False
     if log_wandb:
