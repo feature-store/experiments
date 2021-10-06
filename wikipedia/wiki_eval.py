@@ -1,5 +1,6 @@
 from typing import List
 import pickle
+import shutil
 from tqdm import tqdm
 import time
 import numpy as np
@@ -247,6 +248,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
 
         # save version
         embed_versions[version] = state
+    print("EMBED", embed_versions.keys())
     print("Num refits", count, len(missing))
 
     # returns latest version of document embeddings for timestep/key
@@ -276,8 +278,11 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
 
     # create experiment directory
     directory = os.path.join(exp_dir, exp_id)
-    if not os.path.exists(directory):
-        os.mkdir(directory)
+    if os.path.isdir(directory):
+        print("Removing", directory)
+        shutil.rmtree(directory)
+    print("Creating", directory)
+    os.mkdir(directory)
 
     # get simulation data questions
     questions = json.load(open(stream_questions_file))
@@ -352,7 +357,7 @@ def main():
     exp_id = os.path.basename(plan_file).replace(".json", "")
 
     output_dir = offline_eval(plan_file, exp_id, compute_embeddings=args.embed)
-    log_wandb = True
+    log_wandb = False
     if log_wandb:
         import wandb
 

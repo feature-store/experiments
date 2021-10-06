@@ -9,14 +9,14 @@ embedding_dir = %(data_dir)s/embeddings/
 
 [files]
 data_dir = /data/wooders/wikipedia
-raw_questions_file = %(data_dir)s/10042021_questions_revid.csv
+raw_questions_file = %(data_dir)s/10052021_questions_revid.csv 
 model_file = %(data_dir)s/bert-base-encoder.cp
 changes_file = %(data_dir)s/changes.csv
 titles_file = %(data_dir)s/top_titles.csv
 revisions_file = %(data_dir)s/title_revisions_timestamps.json
 edits_file = %(data_dir)s/edits.csv 
 questions_file = %(data_dir)s/questions.csv
-pageview_file = /home/ubuntu/data/top_title_views.csv
+pageview_file = %(data_dir)s/top_title_views.csv
 
 [simulation]
 data_dir = /data/wooders/wikipedia

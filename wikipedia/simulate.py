@@ -19,7 +19,11 @@ from ralf.policies.processing_policy import fifo, lifo  # , make_sorter_with_key
 from ralf.simulation.priority_queue import PerKeyPriorityQueue
 from ralf.simulation.source import JSONSource
 from ralf.simulation.window import WindowOperator
-from ralf.simulation.mapper import RalfMapper, RoundRobinLoadBalancer
+from ralf.simulation.mapper import (
+    RalfMapper,
+    RoundRobinLoadBalancer,
+    CrossKeyLoadBalancer,
+)
 
 
 from ralf.policies.load_shedding_policy import (
@@ -31,42 +35,74 @@ from ralf.policies.load_shedding_policy import (
     make_cosine_policy,
 )
 
+from typing import Dict, List, Tuple, Type
+
+
+class WeightedLoadBalancer(CrossKeyLoadBalancer):
+
+    # def __init__(self, keys, key_weights):
+    #    self.keys = keys
+    #    self.key_weights = key_weights
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+
+        chosen_key = None
+        max_len = 0
+        for key in per_key_queues.keys():
+            if per_key_queues[key].size() > max_len:
+                chosen_key = key
+                max_len = per_key_queues[key].size()
+        # print("choose", chosen_key, max_len)
+        return chosen_key
+
 
 class WikiMapper(RalfMapper):
+    def __init__(
+        self,
+        env: simpy.Environment,
+        source_queues: Dict[str, PerKeyPriorityQueue],
+        key_selection_policy_cls: Type[CrossKeyLoadBalancer],
+        model_run_time_s: float,
+        keys: List[str],
+    ) -> None:
 
-    # def __init__(
-    #    self,
-    #    env: simpy.Environment,
-    #    source_queues: Dict[KeyType, PerKeyPriorityQueue],
-    #    key_selection_policy_cls: Type[CrossKeyLoadBalancer],
-    #    model_run_time_s: float,
-    # ) -> None:
+        super().__init__(env, source_queues, key_selection_policy_cls, model_run_time_s)
+        self.keys = keys
 
-    #    self.env = env
-    #    self.source_queues = source_queues
-    #    self.key_selection_policy = key_selection_policy_cls()
-    #    self.model_runtime_s = model_run_time_s
-    #    self.env.process(self.run())
+        # self.env = env
+        # self.source_queues = source_queues
+        # self.key_selection_policy = key_selection_policy_cls()
+        # self.model_runtime_s = model_run_time_s
+        # self.env.process(self.run())
 
-    #    self.ready_time_to_batch: Dict[float, List[Tuple[int, float]]] = {}
+        # self.ready_time_to_batch: Dict[float, List[Tuple[int, float]]] = {}
 
     def run(self):
         while True:
+            if self.env.now > 387:
+                break
             # windows = yield self.source_queue.get()
             chosen_key = self.key_selection_policy.choose(self.source_queues)
-            windows = yield self.source_queues[chosen_key].get()
-            print(
-                f"at time {self.env.now:.2f}, RalfMapper should work on {windows} (last timestamp)"
-            )
-            edits = [(val, chosen_key) for val in windows.window[0].value]
-            print("edits", edits)
 
-            if self.env.now in self.ready_time_to_batch:
-                self.ready_time_to_batch[self.env.now] += edits
-            else:
-                self.ready_time_to_batch[self.env.now] = edits
+            if chosen_key is not None:
 
-            yield self.env.timeout(self.model_runtime_s)
+                # for chosen_key in self.keys:
+                windows = yield self.source_queues[chosen_key].get()
+                print(
+                    f"at time {self.env.now:.2f}, RalfMapper should work on {windows} (last timestamp)"
+                )
+                edits = [(val, chosen_key) for val in windows.window[0].value]
+                print("edits", edits)
+
+                if self.env.now in self.ready_time_to_batch:
+                    self.ready_time_to_batch[self.env.now] += edits
+                else:
+                    self.ready_time_to_batch[self.env.now] = edits
+
+                yield self.env.timeout(self.model_runtime_s)
+
+            else:  # nothing to do
+                yield self.env.timeout(0.01)
 
 
 policies = {
@@ -121,7 +157,8 @@ def run_once(
         env,
         source_queues=windows_to_mapper_queue,
         model_run_time_s=model_runtime_constant,
-        key_selection_policy_cls=RoundRobinLoadBalancer,
+        key_selection_policy_cls=WeightedLoadBalancer,
+        keys=keys,
     )
     env.run(until=total_runtime_s)
 
@@ -155,6 +192,8 @@ if __name__ == "__main__":
     model_runtimes = [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
     records_per_second = [100]
 
+    output_files = []
+
     for prio_policy in prioritization_policies:
         for load_shed_policy in load_shedding_policies:
             for runtime in model_runtimes:
@@ -172,4 +211,7 @@ if __name__ == "__main__":
                         model_runtime_constant=runtime,
                         data_file=stream_edits_file,
                     )
-                    print("done", out_path)
+                    output_files.append(out_path)
+                    print("DONE", out_path)
+    for f in output_files:
+        print(f)

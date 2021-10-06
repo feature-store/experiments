@@ -59,7 +59,10 @@ class EditSource(Source):
     """
 
     def __init__(
-        self, send_rate, f, cache_size=DEFAULT_STATE_CACHE_SIZE,
+        self,
+        send_rate,
+        f,
+        cache_size=DEFAULT_STATE_CACHE_SIZE,
     ):
         schema = Schema(
             "key",
@@ -116,7 +119,10 @@ class EditSource(Source):
 @ray.remote
 class Passages(Operator):
     def __init__(
-        self, cache_size=DEFAULT_STATE_CACHE_SIZE, lazy=False, num_worker_threads=1,
+        self,
+        cache_size=DEFAULT_STATE_CACHE_SIZE,
+        lazy=False,
+        num_worker_threads=1,
     ):
 
         schema = Schema(
@@ -256,7 +262,10 @@ class Retriever(Operator):
 @ray.remote
 class GroupByDoc(Operator):
     def __init__(
-        self, cache_size=DEFAULT_STATE_CACHE_SIZE, lazy=False, num_worker_threads=1,
+        self,
+        cache_size=DEFAULT_STATE_CACHE_SIZE,
+        lazy=False,
+        num_worker_threads=1,
     ):
 
         schema = Schema(

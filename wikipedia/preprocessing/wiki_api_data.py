@@ -66,6 +66,8 @@ def get_recent_changes(revisions_dir, changes_file):
 
 def get_titles(changes_file, titles_file, n=200):
     changes_df = pd.read_csv(changes_file)
+    title_ids = set(changes_df[["title", "pageid"]].apply(tuple, axis=1).tolist())
+
     counts = changes_df.title.value_counts().to_frame()
     top_titles = counts[counts["title"] > n]
     top_titles.columns = ["count"]
@@ -449,6 +451,10 @@ def search_answer(rev_file, embedding_dir, question):
     return found_answer
 
 
+def generate_key_weights(pageview_file, titles_file):
+    pass
+
+
 def check_dataset(
     titles_file,
     edits_file,
@@ -555,7 +561,7 @@ if __name__ == "__main__":
 
     # configuration file
     config = configparser.ConfigParser()
-    config.read("../config.yml")
+    config.read("config.yml")
 
     # argument flags
     parser = argparse.ArgumentParser()
