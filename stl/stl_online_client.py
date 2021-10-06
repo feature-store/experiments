@@ -52,7 +52,9 @@ def make_redis_producer():
 
 def snapshot_db_state(pkl_path):
     r = redis.Redis(db=FLAGS.redis_model_db_id)
-    state = {key: r.dumps(key) for key in r.keys("*")}
+    state = {key: r.dump(key) for key in r.keys("*")}
+    print(f"state size: {len(state)}")
+    # print(f"21 send time: {r.dumps('21/models/send_time')}")
     with open(pkl_path, "wb") as f:
         msgpack.dump(state, f)
 
