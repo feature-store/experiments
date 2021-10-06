@@ -1,5 +1,4 @@
 use std::{
-    str::FromStr,
     thread,
     time::{Duration, Instant},
 };

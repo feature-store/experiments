@@ -5,6 +5,8 @@ extern crate differential_dataflow;
 extern crate timely;
 extern crate timely_experiments;
 
+use std::collections::HashMap;
+
 use clap::{App, Arg};
 
 use timely_experiments::{
@@ -19,6 +21,7 @@ fn run_experiment(
     source_str: &str,
     global_window_size: usize,
     global_slide_size: usize,
+    per_key_slide_size: Option<HashMap<usize, usize>>,
     seasonality: usize,
     num_keys: usize,
     timesteps: usize,
@@ -37,7 +40,11 @@ fn run_experiment(
                 "fake" => fake_source(scope, "Fake Source", num_keys, send_rate_hz, timesteps),
                 _ => panic!("Invalid source specified."),
             };
-            let windows = source.sliding_window(global_window_size, global_slide_size);
+            let windows = if let Some(slide_sizes) = per_key_slide_size.as_ref() {
+                source.variable_sliding_window(global_window_size, slide_sizes.clone())
+            } else {
+                source.sliding_window(global_window_size, global_slide_size)
+            };
             let models = windows.stl_fit(seasonality);
             models.to_redis();
 
@@ -81,6 +88,12 @@ fn main() {
                 .long("global_slide_size")
                 .takes_value(true)
                 .default_value("100"),
+        )
+        .arg(
+            Arg::with_name("per_key_slide_size")
+                .long("per_key_slide_size")
+                .takes_value(true)
+                .help("JSON file containing the slide size for each key."),
         )
         .arg(
             Arg::with_name("seasonality")
@@ -134,10 +147,17 @@ fn main() {
     let timesteps = matches.value_of("timesteps").unwrap().parse().unwrap();
     let send_rate = matches.value_of("send_rate").unwrap().parse().unwrap();
 
+    let per_key_slide_size = if let Some(filename) = matches.value_of("per_key_slide_size") {
+        Some(timely_experiments::parse_per_key_slide_size(filename))
+    } else {
+        None
+    };
+
     run_experiment(
         source,
         global_window_size,
         global_slide_size,
+        per_key_slide_size,
         seasonality,
         num_keys,
         timesteps,
