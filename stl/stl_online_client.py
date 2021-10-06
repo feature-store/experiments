@@ -11,7 +11,6 @@ import msgpack
 import pandas as pd
 import redis
 from absl import app, flags
-from examples.stl.stl_offline_eval import main
 from ralf.client import RalfClient
 
 FLAGS = flags.FLAGS
