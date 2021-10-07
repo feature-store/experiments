@@ -116,6 +116,24 @@ def get_questions(raw_questions_file, questions_file):
     questions_df.to_csv(questions_file)
     return questions_df
 
+def get_pageviews(raw_pageview_file, pageview_file, edits_file): 
+
+    edits_df = pd.read_csv(edits_file)
+    pageview_df = pd.read_csv(raw_pageview_file)
+
+    # map title -> id
+    title_to_id = edits_df.set_index("title")["pageid"].to_dict()
+    open("title_to_id.json", "w").write(json.dumps(title_to_id))
+    
+    # calculate page weights
+    total_views = pageview_df.iloc[:, 2:].sum(axis=1).sum()
+    weights = pageview_df.iloc[:, 2:].sum(axis=1) / total_views 
+    pageview_df['weights'] = weights
+    pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
+    pageview_df.to_csv(pageview_file)
+
+    return pageview_df
+
 
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
@@ -578,6 +596,7 @@ if __name__ == "__main__":
         "--run_parse_docs", action="store_true", default=False
     )  # re-parse document versions
     parser.add_argument("--run_get_questions", action="store_true", default=False)
+    parser.add_argument("--run_get_pageviews", action="store_true", default=False)
     parser.add_argument(
         "--run_generate_diffs", action="store_true", default=False
     )  # re-process generating diffs
@@ -605,6 +624,7 @@ if __name__ == "__main__":
     edits_file = config["files"]["edits_file"]
     raw_questions_file = config["files"]["raw_questions_file"]
     questions_file = config["files"]["questions_file"]
+    raw_pageview_file = config["files"]["raw_pageview_file"]
     pageview_file = config["files"]["pageview_file"]
 
     # simulation data
@@ -646,6 +666,10 @@ if __name__ == "__main__":
     if args.run_get_questions:
         questions_df = get_questions(raw_questions_file, questions_file)
         print("Generated questions file", questions_file)
+
+    # generate pageviews / compute page weights
+    if args.run_get_pageviews:
+        get_pageviews(raw_pageview_file, pageview_file, edits_file)
 
     # generate diffs between document versions
     if args.run_generate_diffs:

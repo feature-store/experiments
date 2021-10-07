@@ -17,7 +17,8 @@ titles_file = %(data_dir)s/top_titles.csv
 revisions_file = %(data_dir)s/title_revisions_timestamps.json
 edits_file = %(data_dir)s/edits.csv
 questions_file = %(data_dir)s/questions.csv
-pageview_file = %(data_dir)s/top_title_views.csv
+raw_pageview_file = %(data_dir)s/top_title_views.csv
+pageview_file = %(data_dir)s/pageviews.csv
 
 [simulation]
 data_dir = /data/wooders/wikipedia

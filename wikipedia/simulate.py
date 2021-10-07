@@ -3,6 +3,7 @@ from typing import DefaultDict, Dict, List, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cmp_to_key
+import random
 
 import configparser
 
@@ -40,9 +41,53 @@ from typing import Dict, List, Tuple, Type
 
 class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
-    # def __init__(self, keys, key_weights):
-    #    self.keys = keys
-    #    self.key_weights = key_weights
+    def __init__(self, pageview_file):
+        pageview_df = pd.read_csv(pageview_file)
+        self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        print(self.weights)
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+        chosen_key = None
+        max_len = 0
+        total_len = 0
+        keys = []
+        weights = []
+        for key in per_key_queues.keys():
+            size = per_key_queues[key].size()
+            if size >= 1 and int(key) in self.weights:
+                keys.append(key)
+                weights.append(self.weights[int(key)])
+            total_len += size
+
+        chosen_key = random.choices(keys, weights, k=1)[0]
+        #print("choose", chosen_key, keys, weights)
+        return chosen_key, total_len
+
+class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
+
+    def __init__(self, pageview_file):
+        pageview_df = pd.read_csv(pageview_file)
+        self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        print(self.weights)
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+        chosen_key = None
+        max_len = 0
+        total_len = 0
+        for key in per_key_queues.keys():
+            size = per_key_queues[key].size()
+            if int(key) not in self.weights:
+                continue
+            weighted_size = self.weights[int(key)]
+            if weighted_size > max_len:
+                chosen_key = key
+                max_len = size
+            total_len += size
+        print(chosen_key, max_len, self.weights[int(chosen_key)])
+        return chosen_key, total_len
+
+
+class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
 
     def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
         chosen_key = None
@@ -129,6 +174,7 @@ def run_once(
     total_runtime_s: float,
     model_runtime_constant: float,
     data_file: str = None,
+    weights_file: str = None
 ):
 
     env = simpy.Environment()
@@ -164,7 +210,7 @@ def run_once(
         env,
         source_queues=windows_to_mapper_queue,
         model_run_time_s=model_runtime_constant,
-        key_selection_policy_cls=WeightedLoadBalancer,
+        key_selection_policy_cls=WeightedLongestQueueLoadBalancer(weights_file),
         keys=keys,
     )
     env.run(until=total_runtime_s)
@@ -187,6 +233,7 @@ if __name__ == "__main__":
     init_data_file = config["simulation"]["init_data_file"]
     stream_edits_file = config["simulation"]["stream_edits_file"]
     stream_questions_file = config["simulation"]["stream_questions_file"]
+    pageview_file = config["files"]["pageview_file"]
 
     # load simulation data
     edits = json.load(open(stream_edits_file))
@@ -195,31 +242,35 @@ if __name__ == "__main__":
 
     # policies
     prioritization_policies = ["fifo"]  # ["fifo", "lifo"]
+    key_selection_policies = ["pageview"]
     load_shedding_policies = ["always_process"]
-    model_runtimes = [0]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    model_runtimes = [0.1]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
     records_per_second = [100]
 
     output_files = []
 
-    for prio_policy in prioritization_policies:
-        for load_shed_policy in load_shedding_policies:
-            for runtime in model_runtimes:
-                for rate in records_per_second:
+    for key_selection in key_selection_policies:
+        for prio_policy in prioritization_policies:
+            for load_shed_policy in load_shedding_policies:
+                for runtime in model_runtimes:
+                    for rate in records_per_second:
 
-                    out_path = f"{plan_dir}/plan-{prio_policy}-{load_shed_policy}-{runtime}-{rate}.json"
-                    print("running", out_path, runtime)
-                    run_once(
-                        out_path,
-                        prio_policy,
-                        load_shed_policy,
-                        keys,
-                        per_key_records_per_second=rate,
-                        total_runtime_s=len(edits),
-                        model_runtime_constant=runtime,
-                        data_file=stream_edits_file,
-                    )
-                    output_files.append(out_path)
-                    print("DONE", out_path)
+                        out_path = f"{plan_dir}/plan-{key_selection}_{prio_policy}-{load_shed_policy}-{runtime}-{rate}.json"
+                        print("running", out_path, runtime)
+                        run_once(
+                            out_path,
+                            prio_policy,
+                            load_shed_policy,
+                            keys,
+                            per_key_records_per_second=rate,
+                            total_runtime_s=len(edits),
+                            model_runtime_constant=runtime,
+                            data_file=stream_edits_file,
+                            weights_file=pageview_file,
+                        )
+
+                        output_files.append(out_path)
+                        print("DONE", out_path)
     for f in output_files:
         print(f)
     open("plans.txt", "w").write("\n".join(output_files))
