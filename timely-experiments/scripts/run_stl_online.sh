@@ -11,8 +11,10 @@ redis-server --save "" --appendonly no &
 
 cargo run --release -- \
     --source=redis \
-    --global_window_size=100 \
+    --global_window_size=672 \
     --global_slide_size=48 \
+    --per_key_slide_size=./result/min_loss_plan.json \
+    --threads=1
     --seasonality=168 &
 
 python ../stl/stl_online_client.py \
