@@ -44,7 +44,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
     def __init__(self, pageview_file):
         pageview_df = pd.read_csv(pageview_file)
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
-        print(self.weights)
+        #print(self.weights)
 
     def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
         chosen_key = None
@@ -63,12 +63,29 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
         #print("choose", chosen_key, keys, weights)
         return chosen_key, total_len
 
+class RandomLoadBalancer(CrossKeyLoadBalancer):
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+        chosen_key = None
+        max_len = 0
+        total_len = 0
+        keys = []
+        for key in per_key_queues.keys():
+            size = per_key_queues[key].size()
+            if size >= 1:
+                keys.append(key)
+            total_len += size
+
+        chosen_key = random.choices(keys, k=1)[0]
+        return chosen_key, total_len
+
+
 class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
 
     def __init__(self, pageview_file):
         pageview_df = pd.read_csv(pageview_file)
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
-        print(self.weights)
+        #print(self.weights)
 
     def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
         chosen_key = None
@@ -83,9 +100,32 @@ class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
                 chosen_key = key
                 max_len = size
             total_len += size
-        print(chosen_key, max_len, self.weights[int(chosen_key)])
+        #print(chosen_key, max_len, self.weights[int(chosen_key)])
         return chosen_key, total_len
 
+class WeightedLoadBalancer(CrossKeyLoadBalancer):
+
+    def __init__(self, pageview_file):
+        pageview_df = pd.read_csv(pageview_file)
+        self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        #print(self.weights)
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+        chosen_key = None
+        max_len = 0
+        total_len = 0
+        keys = []
+        weights = []
+        for key in per_key_queues.keys():
+            size = per_key_queues[key].size()
+            if size >= 1 and int(key) in self.weights:
+                keys.append(key)
+                weights.append(self.weights[int(key)])
+            total_len += size
+
+        chosen_key = random.choices(keys, weights, k=1)[0]
+        #print("choose", chosen_key, keys, weights)
+        return chosen_key, total_len
 
 class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
 
@@ -157,11 +197,30 @@ class WikiMapper(RalfMapper):
             yield self.env.timeout(self.model_runtime_s)
 
 
+# configuration file
+config = configparser.ConfigParser()
+config.read("config.yml")
+plan_dir = config["simulation"]["plan_dir"]
+init_data_file = config["simulation"]["init_data_file"]
+stream_edits_file = config["simulation"]["stream_edits_file"]
+stream_questions_file = config["simulation"]["stream_questions_file"]
+pageview_file = config["files"]["pageview_file"]
+
+# load simulation data
+edits = json.load(open(stream_edits_file))
+init_data = json.load(open(init_data_file))
+keys = list(init_data.keys())
+
 policies = {
     "fifo": fifo,
     "lifo": lifo,
     "always_process": always_process,
     "sample_half": make_sampling_policy(0.5),
+    "weighted_random": WeightedLoadBalancer(pageview_file), 
+    "weighted_longest_queue": WeightedLongestQueueLoadBalancer(pageview_file),
+    "longest_queue": LongestQueueLoadBalancer(),
+    "random": RandomLoadBalancer(),
+    "round_robin": RoundRobinLoadBalancer()
 }
 
 
@@ -173,8 +232,7 @@ def run_once(
     per_key_records_per_second: int,
     total_runtime_s: float,
     model_runtime_constant: float,
-    data_file: str = None,
-    weights_file: str = None
+    key_selection_policy: str
 ):
 
     env = simpy.Environment()
@@ -195,7 +253,7 @@ def run_once(
         num_keys=len(keys),
         next_queue=source_to_window_queue,
         total_run_time=total_runtime_s,
-        data_file=data_file,
+        data_file=stream_edits_file,
     )
 
     WindowOperator(
@@ -210,7 +268,7 @@ def run_once(
         env,
         source_queues=windows_to_mapper_queue,
         model_run_time_s=model_runtime_constant,
-        key_selection_policy_cls=WeightedLongestQueueLoadBalancer(weights_file),
+        key_selection_policy_cls=policies[key_selection_policy],
         keys=keys,
     )
     env.run(until=total_runtime_s)
@@ -225,26 +283,11 @@ if __name__ == "__main__":
     # load sheding: random, drop short edits
     # prioritization: prioritize most recent version
     # cross-key prioritzation: historical page views,
-
-    # configuration file
-    config = configparser.ConfigParser()
-    config.read("config.yml")
-    plan_dir = config["simulation"]["plan_dir"]
-    init_data_file = config["simulation"]["init_data_file"]
-    stream_edits_file = config["simulation"]["stream_edits_file"]
-    stream_questions_file = config["simulation"]["stream_questions_file"]
-    pageview_file = config["files"]["pageview_file"]
-
-    # load simulation data
-    edits = json.load(open(stream_edits_file))
-    init_data = json.load(open(init_data_file))
-    keys = list(init_data.keys())
-
     # policies
-    prioritization_policies = ["fifo"]  # ["fifo", "lifo"]
-    key_selection_policies = ["pageview"]
+    prioritization_policies = ["lifo", "fifo"]  # ["fifo", "lifo"]
+    key_selection_policies = ["weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin"]
     load_shedding_policies = ["always_process"]
-    model_runtimes = [0.1]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    model_runtimes = [0.01, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
     records_per_second = [100]
 
     output_files = []
@@ -265,8 +308,7 @@ if __name__ == "__main__":
                             per_key_records_per_second=rate,
                             total_runtime_s=len(edits),
                             model_runtime_constant=runtime,
-                            data_file=stream_edits_file,
-                            weights_file=pageview_file,
+                            key_selection_policy=key_selection,
                         )
 
                         output_files.append(out_path)

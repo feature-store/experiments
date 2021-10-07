@@ -665,7 +665,7 @@ if __name__ == "__main__":
     # get questions
     if args.run_get_questions:
         questions_df = get_questions(raw_questions_file, questions_file)
-        print("Generated questions file", questions_file)
+        print("Generated questions file", raw_questions_file, questions_file)
 
     # generate pageviews / compute page weights
     if args.run_get_pageviews:

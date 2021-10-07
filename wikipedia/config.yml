@@ -10,7 +10,7 @@ exp_dir  = %(data_dir)s/simulation_output/
 
 [files]
 data_dir = /data/wooders/wikipedia
-raw_questions_file = %(data_dir)s/10052021_questions_revid.csv
+raw_questions_file = %(data_dir)s/10062021_filtered_questions.csv
 model_file = %(data_dir)s/bert-base-encoder.cp
 changes_file = %(data_dir)s/changes.csv
 titles_file = %(data_dir)s/top_titles.csv
