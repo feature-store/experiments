@@ -1,4 +1,8 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    fs::File,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub mod operators;
 mod record;
@@ -10,4 +14,9 @@ pub fn ns_since_unix_epoch() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+pub fn parse_per_key_slide_size(filename: &str) -> HashMap<usize, usize> {
+    let file = File::open(filename).unwrap();
+    serde_json::from_reader(file).unwrap()
 }
