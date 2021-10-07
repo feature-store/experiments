@@ -15,7 +15,6 @@ import numpy as np
 from multiprocessing import Pool
 
 # from concurrent.futures import ProcessPoolExecutor
-from bs4 import BeautifulSoup
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
 from generate_diffs import generate_sentence_level_diffs
@@ -23,6 +22,7 @@ from embedding import generate_embeddings
 
 
 def query_recentchanges(start_time, end_time, revision_file):
+    from bs4 import BeautifulSoup
     pass
 
 
