@@ -61,7 +61,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
         chosen_key = random.choices(keys, weights, k=1)[0]
         #print("choose", chosen_key, keys, weights)
-        return chosen_key, total_len
+        return chosen_key
 
 class RandomLoadBalancer(CrossKeyLoadBalancer):
 
@@ -77,7 +77,7 @@ class RandomLoadBalancer(CrossKeyLoadBalancer):
             total_len += size
 
         chosen_key = random.choices(keys, k=1)[0]
-        return chosen_key, total_len
+        return chosen_key
 
 
 class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
@@ -101,7 +101,7 @@ class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
                 max_len = size
             total_len += size
         #print(chosen_key, max_len, self.weights[int(chosen_key)])
-        return chosen_key, total_len
+        return chosen_key
 
 class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
@@ -125,7 +125,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
         chosen_key = random.choices(keys, weights, k=1)[0]
         #print("choose", chosen_key, keys, weights)
-        return chosen_key, total_len
+        return chosen_key
 
 class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
 
@@ -139,7 +139,7 @@ class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
                 chosen_key = key
                 max_len = size
             total_len += size
-        return chosen_key, total_len
+        return chosen_key
 
 
 class WikiMapper(RalfMapper):
@@ -174,7 +174,7 @@ class WikiMapper(RalfMapper):
             yield simpy.AnyOf(self.env, [q.wait() for q in self.source_queues.values()])
 
             # choose key
-            chosen_key, total_size = self.key_selection_policy.choose(
+            chosen_key = self.key_selection_policy.choose(
                 self.source_queues
             )
             assert chosen_key is not None
