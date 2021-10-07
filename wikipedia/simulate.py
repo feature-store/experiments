@@ -81,39 +81,28 @@ class WikiMapper(RalfMapper):
 
     def run(self, replica_id: int):
 
-        #this_shard_source_queues = {
-        #    key: self.total_source_queues[key] for key in self.sharded_keys[replica_id]
-        #}
-        
+        self.source_queues = {
+            key: self.total_source_queues[key] for key in self.sharded_keys[replica_id]
+        }
+
         while True:
-            if self.env.now > 387:
-                break
+            yield simpy.AnyOf(self.env, [q.wait() for q in self.source_queues.values()])
 
-            _, total_size_orig = self.key_selection_policy.choose(self.source_queues)
-            trigger = yield simpy.AnyOf(self.env, [q.get() for q in self.source_queues.values()])
-            print("keys", list(trigger.keys()))
-            print("values", list(trigger.values()))
-                    
-
-            # Add back items to queue (since trigger gets them)
-            for event in trigger.keys(): 
-                print("add back", event.value.key, event.value)
-                yield self.source_queues[event.value.key].put(event.value)
-    
             # choose key
-            chosen_key, total_size = self.key_selection_policy.choose(self.source_queues)
+            chosen_key, total_size = self.key_selection_policy.choose(
+                self.source_queues
+            )
             assert chosen_key is not None
 
             # make sure queue size OK - jk doesn't work with dropping
-            #assert total_size_orig == 0 or total_size == total_size_orig, f"Bad queue size {total_size_orig} -> {total_size}"
-       
-            # get chosen key 
+            # assert total_size_orig == 0 or total_size == total_size_orig, f"Bad queue size {total_size_orig} -> {total_size}"
+
+            # get chosen key
             windows = yield self.source_queues[chosen_key].get()
-            print(
-                f"at time {self.env.now:.2f}, RalfMapper should work on {windows} (last timestamp), queue size {total_size}, wait time {self.model_runtime_s}"
-            )
+            # print(
+            #     f"at time {self.env.now:.2f}, RalfMapper should work on {windows} (last timestamp), queue size {total_size}, wait time {self.model_runtime_s}"
+            # )
             edits = [(val, windows.key) for val in windows.window[0].value]
-            print("edits", edits)
 
             if self.env.now in self.ready_time_to_batch:
                 self.ready_time_to_batch[self.env.now] += edits
@@ -205,10 +194,10 @@ if __name__ == "__main__":
     keys = list(init_data.keys())
 
     # policies
-    prioritization_policies = ["fifo", "lifo"]
-    load_shedding_policies = ["always_process", "sample_half"]
-    model_runtimes = [1, 10, 0.01, 0, 0.1, 0.001]
-    records_per_second = [10]
+    prioritization_policies = ["fifo"]  # ["fifo", "lifo"]
+    load_shedding_policies = ["always_process"]
+    model_runtimes = [0]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    records_per_second = [100]
 
     output_files = []
 
@@ -233,4 +222,4 @@ if __name__ == "__main__":
                     print("DONE", out_path)
     for f in output_files:
         print(f)
-    open("plans.txt", "w").write('\n'.join(output_files))
+    open("plans.txt", "w").write("\n".join(output_files))
