@@ -19,6 +19,7 @@ edits_file = %(data_dir)s/edits.csv
 questions_file = %(data_dir)s/questions.csv
 raw_pageview_file = %(data_dir)s/top_title_views.csv
 pageview_file = %(data_dir)s/pageviews.csv
+timestamp_weights_file = %(data_dir)s/timestamp_weights_file.json
 
 [simulation]
 data_dir = /data/wooders/wikipedia

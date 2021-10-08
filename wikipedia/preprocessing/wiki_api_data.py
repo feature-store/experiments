@@ -4,6 +4,7 @@ import pickle
 import json
 from tqdm import tqdm
 from collections import defaultdict
+from datetime import datetime
 import subprocess
 
 import configparser
@@ -116,7 +117,7 @@ def get_questions(raw_questions_file, questions_file):
     questions_df.to_csv(questions_file)
     return questions_df
 
-def get_pageviews(raw_pageview_file, pageview_file, edits_file): 
+def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file): 
 
     edits_df = pd.read_csv(edits_file)
     pageview_df = pd.read_csv(raw_pageview_file)
@@ -132,6 +133,19 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file):
     pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
     pageview_df.to_csv(pageview_file)
 
+    # page weights per timestamp
+    ts_to_weights = {}
+    dates = pageview_df.columns[2:-2]
+    for date in dates: 
+        print(date)
+        dt = datetime.strptime(date[:-2], '%Y%m%d')
+        ts = dt.timestamp() * 1000000000
+        ts_min = assign_timestamps_min(ts)
+        view_counts = pageview_df[date].tolist()
+        id_to_count  = pageview_df.set_index("doc_id")[date].to_dict()
+        ts_to_weights[ts_min] = id_to_count
+    open(timestamp_weights_file, "w").write(json.dumps(ts_to_weights))
+    print("Generated ts weights file", timestamp_weights_file)
     return pageview_df
 
 
@@ -626,6 +640,7 @@ if __name__ == "__main__":
     questions_file = config["files"]["questions_file"]
     raw_pageview_file = config["files"]["raw_pageview_file"]
     pageview_file = config["files"]["pageview_file"]
+    timestamp_weights_file = config["files"]["timestamp_weights_file"]
 
     # simulation data
     init_data_file = config["simulation"]["init_data_file"]
@@ -669,7 +684,7 @@ if __name__ == "__main__":
 
     # generate pageviews / compute page weights
     if args.run_get_pageviews:
-        get_pageviews(raw_pageview_file, pageview_file, edits_file)
+        get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
 
     # generate diffs between document versions
     if args.run_generate_diffs:

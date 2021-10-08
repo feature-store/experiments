@@ -63,7 +63,7 @@ flags.DEFINE_string(
     None,
     "path to generated per key's window slide size config.",
 )
-flags.DEFINE_integer("num_mapper_replicas", None, "number of replicas for mapper")
+flags.DEFINE_integer("num_mapper_replicas", 1, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:
@@ -74,14 +74,22 @@ def _get_config() -> Dict:
 def main(argv):
     env = simpy.Environment()
     # source --source_to_window_queue--> window --windows_to_mapper_queue--> mapper
+
+    policy_plan_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
+    policy_params = json.load(open(policy_plan_path))
+
+    keys = policy_params.keys()
+    print(keys)
+
     source_to_window_queue = simpy.Store(env)
     windows_to_mapper_queue = {
-        i: PerKeyPriorityQueue(
+        key: PerKeyPriorityQueue(
             env,
             processing_policy=prio_policies[FLAGS.key_prio_policy],
             load_shedding_policy=load_shed_policies[FLAGS.key_load_shed_policy],
         )
-        for i in range(FLAGS.num_keys)
+        #for i in range(FLAGS.num_keys)
+        for key in keys
     }
     Source(
         env,
@@ -89,13 +97,15 @@ def main(argv):
         num_keys=FLAGS.num_keys,
         next_queue=source_to_window_queue,
         total_run_time=FLAGS.total_runtime_s,
-        data_file=FLAGS.source_data_path,
+        keys=keys,
+        data_dir="/data/wooders/stl/yahoo/A4",
+        #data_file=FLAGS.source_data_path,
     )
     WindowOperator(
         env,
         window_size=FLAGS.window_size,
         slide_size=FLAGS.slide_size,
-        per_key_slide_size_path=FLAGS.per_key_slide_size_plan,
+        per_key_slide_size_path=policy_plan_path,
         source_queue=source_to_window_queue,
         next_queues=windows_to_mapper_queue,
     )
@@ -104,7 +114,7 @@ def main(argv):
         source_queues=windows_to_mapper_queue,
         model_run_time_s=FLAGS.model_runtime_s,
         # TODO(simon): customize this once we want different key selection policy
-        key_selection_policy_cls=RoundRobinLoadBalancer,
+        key_selection_policy_cls=RoundRobinLoadBalancer(),
         num_replicas=FLAGS.num_mapper_replicas,
     )
     env.run(until=FLAGS.total_runtime_s)
@@ -112,7 +122,7 @@ def main(argv):
     plan = m.plan
     config = _get_config()
     if FLAGS.output_path:
-        os.makedirs(os.path.split(FLAGS.output_path)[0], exist_ok=True)
+        #os.makedirs(os.path.split(FLAGS.output_path)[0], exist_ok=True)
         with open(FLAGS.output_path, "w") as f:
             json.dump(plan, f, indent=2)
         with open(FLAGS.output_path + ".config.json", "w") as f:

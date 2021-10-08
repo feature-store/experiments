@@ -170,6 +170,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
     # compute initial passage embeddings for each document
     init_data = json.load(open(init_data_file))
     init_state = {}
+    staleness = []
     for key in tqdm(init_data.keys()):
 
         if filter_keys and key not in keys:
@@ -210,7 +211,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
     for version in tqdm(embed_version_keys):
         state = {}
         for task in plan[version]:
-            print("task", task, version)
+            #print("task", task, version)
             rev_file = task[0]
             doc_id = task[1]
             # doc_id = task[2]
@@ -266,7 +267,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 and doc_id in embed_versions[str(version)]
             ):
                 latest = version
-        print(doc_id, "latest", timestep, latest, timestep - latest)
+        #print(doc_id, "latest", timestep, latest, timestep - latest)
         assert (
             doc_id in embed_versions[str(latest)]
         ), f"Missing doc id {doc_id} {latest} {doc_id in init_data}"
@@ -305,6 +306,11 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 # print(init_data.keys())
                 continue
 
+            # get current embedding and write
+            passage_texts, passage_embeddings, version, latest = get_latest_embedding(
+                timestep, doc_id
+            )
+ 
             # loop through questions
             doc_questions = questions[ts][doc_id]
             queries = []
@@ -319,10 +325,8 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 ), f"time mismatch {q['ts_min']}, {timestep}, {ts}"
                 queries.append([question, [answer], doc_id])
 
-            # get current embedding and write
-            passage_texts, passage_embeddings, version, latest = get_latest_embedding(
-                timestep, doc_id
-            )
+                # append per query
+                staleness.append(timestep - latest)
 
             # dump CTX/question script
             contex_file = f"{directory}/dpr_ctx_after_{int(ts)}_{doc_id}"
@@ -349,6 +353,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
             assert len(passage_embeddings) == len(passage_texts)
 
     print("done processing queries!", len(questions))
+    print("staleness", np.array(staleness).mean())
     return directory
 
 

@@ -37,13 +37,9 @@ def predict(event, model):
 SEASONALITY = 24 * 7
 
 
-def offline_eval(yahoo_csv_path, plan_json_path):
+def offline_eval(yahoo_csv_path, plan_df):
     df = pd.read_csv(yahoo_csv_path)
     df["timestamp"] = list(range(len(df)))
-
-    # Headers
-    # processing_time  window_start_seq_id  window_end_seq_id  key
-    plan_df = pd.read_json(plan_json_path)
 
     # Given our model versions from offline plan, run training on corresponding
     # events.
@@ -98,6 +94,24 @@ def offline_eval(yahoo_csv_path, plan_json_path):
         df[new_col] = add_df[new_col]
     return df
 
+def offline_eval_all(yahoo_path): 
+
+    policy_plan_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
+    policy_params = json.load(open(policy_plan_path))
+    plan_df = pd.read_csv(plan_json_path)
+
+    # loop through each key
+    for key in policy_params.keys(): 
+        output_file = "output_{key}.csv"
+        print(key, output_file)
+        plan_df_key = plan_df[plan_df["key"] == key]
+        csv_path = f"{key}.csv"
+        df = offline_eval(csv_path, plan_df_key)
+        df.to_csv(output_file)
+
+    return 
+
+
 
 def offline_oracle(yahoo_csv_path):
     df = pd.read_csv(yahoo_csv_path)
@@ -117,8 +131,16 @@ def offline_oracle(yahoo_csv_path):
 def run_exp(csv_path, plan_path, output_path, run_oracle=False):
     if run_oracle:
         df = offline_oracle(csv_path)
+    elif run_policy: 
+        offline_eval_all(csv_path)
     else:
-        df = offline_eval(csv_path, plan_path)
+
+        # Headers
+        # processing_time  window_start_seq_id  window_end_seq_id  key
+        plan_df = pd.read_json(plan_json_path)
+
+        df = offline_eval(csv_path, plan_df)
+
     df.to_csv(output_path, index=None)
 
 
