@@ -1,7 +1,8 @@
 import argparse
+import json
 import os
 import bisect
-
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.seasonal import STL
@@ -38,14 +39,16 @@ SEASONALITY = 24 * 7
 
 
 def offline_eval(yahoo_csv_path, plan_df):
+    print(yahoo_csv_path)
     df = pd.read_csv(yahoo_csv_path)
     df["timestamp"] = list(range(len(df)))
 
     # Given our model versions from offline plan, run training on corresponding
     # events.
     offline_stl = {}
-    for _, row in plan_df.iterrows():
-        records = df.iloc[row.window_start_seq_id : row.window_end_seq_id + 1].to_dict(
+    print(plan_df)
+    for _, row in tqdm(plan_df.iterrows()): # note: doesn't preserve types
+        records = df.iloc[int(row.window_start_seq_id) : int(row.window_end_seq_id) + 1].to_dict(
             orient="records"
         )
 
@@ -53,6 +56,8 @@ def offline_eval(yahoo_csv_path, plan_df):
         # Each record is an hourly record. Here we chose weekly seasonality.
         trained = train(records, window_size=len(records), seasonality=SEASONALITY)
         offline_stl[row.processing_time] = trained
+
+    print(offline_stl)
 
     # Assign the trained model with every events in the source file.
     def find_freshest_model_version(event_time, model_versions):
@@ -65,6 +70,7 @@ def offline_eval(yahoo_csv_path, plan_df):
         find_freshest_model_version(et, plan_df["processing_time"])
         for et in df["timestamp"]
     ]
+
 
     # Run prediction!
     predicted = []
@@ -94,19 +100,28 @@ def offline_eval(yahoo_csv_path, plan_df):
         df[new_col] = add_df[new_col]
     return df
 
-def offline_eval_all(yahoo_path): 
+def offline_eval_all(yahoo_path, plan_json_path): 
 
-    policy_plan_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
-    policy_params = json.load(open(policy_plan_path))
-    plan_df = pd.read_csv(plan_json_path)
+    param_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
+    print(param_path)
+    policy_params = json.load(open(param_path))
+    plan_df = pd.read_json(plan_json_path)
+    plan_df.to_csv("plan.csv")
+    print("plan index", plan_df.index)
 
     # loop through each key
     for key in policy_params.keys(): 
-        output_file = "output_{key}.csv"
+        output_file = f"output_{key}.csv"
         print(key, output_file)
-        plan_df_key = plan_df[plan_df["key"] == key]
-        csv_path = f"{key}.csv"
+        plan_df_key = plan_df[plan_df["key"] == int(key)]
+        print("key index", plan_df_key.index)
+        plan_df_key.index = pd.RangeIndex(start=0, stop=len(plan_df_key.index))
+        print(plan_df_key)
+        print("key index", plan_df_key.index)
+        #plan_df_key = plan_df
+        csv_path = f"{yahoo_path}/{key}.csv"
         df = offline_eval(csv_path, plan_df_key)
+        plan_df_key.to_csv(f"{key}_plan.csv")
         df.to_csv(output_file)
 
     return 
@@ -128,20 +143,20 @@ def offline_oracle(yahoo_csv_path):
     return df
 
 
-def run_exp(csv_path, plan_path, output_path, run_oracle=False):
+def run_exp(csv_path, plan_path, output_path, run_policy=False, run_oracle=False):
     if run_oracle:
         df = offline_oracle(csv_path)
     elif run_policy: 
-        offline_eval_all(csv_path)
+        offline_eval_all(csv_path, plan_path)
     else:
 
         # Headers
         # processing_time  window_start_seq_id  window_end_seq_id  key
-        plan_df = pd.read_json(plan_json_path)
+        plan_df = pd.read_json(plan_path)
 
         df = offline_eval(csv_path, plan_df)
 
-    df.to_csv(output_path, index=None)
+        df.to_csv(output_path, index=None)
 
 
 def _ensure_dir(path):
@@ -160,13 +175,14 @@ def main():
     assert args.offline_yahoo_csv_path
     if not args.offline_run_oracle:
         assert args.offline_plan_path
-    _ensure_dir(args.output_path)
+    #_ensure_dir(args.output_path)
 
     run_exp(
         csv_path=args.offline_yahoo_csv_path,
         plan_path=args.offline_plan_path,
         output_path=args.output_path,
         run_oracle=args.offline_run_oracle,
+        run_policy=True
     )
 
 

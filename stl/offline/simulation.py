@@ -45,7 +45,7 @@ flags.DEFINE_integer("num_keys", 1, "The number of keys.")
 flags.DEFINE_float("total_runtime_s", 14, "When to end the simulation.")
 flags.DEFINE_float(
     "model_runtime_s",
-    0.2,
+    0.01,
     "The latency for the map function (when processing a single record).",
 )
 flags.DEFINE_integer("window_size", 24 * 7, "The sliding window size.")
@@ -63,7 +63,7 @@ flags.DEFINE_string(
     None,
     "path to generated per key's window slide size config.",
 )
-flags.DEFINE_integer("num_mapper_replicas", 1, "number of replicas for mapper")
+flags.DEFINE_integer("num_mapper_replicas", 10, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:

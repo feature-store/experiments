@@ -39,6 +39,18 @@ from ralf.policies.load_shedding_policy import (
 
 from typing import Dict, List, Tuple, Type
 
+def current_weights(ts, ts_to_weights): 
+    ts = int(ts)
+    min_dist = max(list(ts_to_weights.keys()))
+
+    index = 0
+    for key in ts_to_weights.keys():
+        if key >= ts:
+            break
+        index = key
+
+    return ts_to_weights[key]
+
 class RoundRobinLoadBalancerFix(CrossKeyLoadBalancer):
     """Simple policy that cycle through all the keys fairly"""
 
@@ -46,7 +58,7 @@ class RoundRobinLoadBalancerFix(CrossKeyLoadBalancer):
         self.cur_key_set = set()
         self.cur_key_iter = None
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         key_set = set(per_key_queues.keys())
         if key_set != self.cur_key_set:
             self.cur_key_set = key_set
@@ -86,7 +98,7 @@ class WeightedRoundRobin(CrossKeyLoadBalancer):
         self.cur_key_iter = itertools.cycle(self.cur_key_set)
 
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
 
         key = next(self.cur_key_iter)
         while per_key_queues[key].size() == 0:
@@ -94,6 +106,70 @@ class WeightedRoundRobin(CrossKeyLoadBalancer):
         # TODO(simon): maybe do a "peak" here to trigger eviction policies
         return key
 
+class AdaptiveWeightedRoundRobin(CrossKeyLoadBalancer):
+    """Simple policy that cycle through all the keys fairly"""
+
+    def __init__(self, timestamp_weights_file):
+        self.cur_key_set = []
+        self.cur_key_iter = None
+
+        pageview_df = pd.read_csv(pageview_file)
+        self.raw_weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        self.weights = {}
+        for key in self.raw_weights.keys(): 
+            if str(key) not in all_keys: 
+                continue 
+
+            self.weights[key] = int(self.raw_weights[key]*1000)
+            assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
+        print(self.weights)
+
+
+        for key in self.weights.keys(): 
+            for i in range(self.weights[key]):
+                self.cur_key_set.append(str(key))
+        random.shuffle(self.cur_key_set)
+        print(self.cur_key_set)
+        print("size", len(self.cur_key_set))
+        self.cur_key_iter = itertools.cycle(self.cur_key_set)
+
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
+
+        key = next(self.cur_key_iter)
+        while per_key_queues[key].size() == 0:
+            key = next(self.cur_key_iter)
+        # TODO(simon): maybe do a "peak" here to trigger eviction policies
+        return key
+
+
+class AdaptiveWeightedLoadBalancer(CrossKeyLoadBalancer):
+
+    def __init__(self, timestamp_weights_file):
+        data = json.load(open(timestamp_weights_file))
+        self.timestamp_weights = {}
+        for key in data.keys(): 
+            self.timestamp_weights[int(key)] = data[key]
+
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], timestamp: int) -> str:
+        weights_map = current_weights(timestamp, self.timestamp_weights)
+
+        chosen_key = None
+        max_len = 0
+        total_len = 0
+        keys = []
+        weights = []
+        for key in per_key_queues.keys():
+            size = per_key_queues[key].size()
+            if size >= 1 and key in weights_map:
+                keys.append(key)
+                weights.append(weights_map[key])
+            total_len += size
+        print(weights)
+        print(keys)
+        chosen_key = random.choices(keys, weights, k=1)[0]
+        print("choose", chosen_key, keys, weights)
+        return chosen_key
 
 
 class WeightedLoadBalancer(CrossKeyLoadBalancer):
@@ -103,7 +179,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
         #print(self.weights)
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
         max_len = 0
         total_len = 0
@@ -122,7 +198,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
 class RandomLoadBalancer(CrossKeyLoadBalancer):
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
         max_len = 0
         total_len = 0
@@ -144,7 +220,7 @@ class WeightedLongestQueueLoadBalancer(CrossKeyLoadBalancer):
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
         #print(self.weights)
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
         max_len = 0
         total_len = 0
@@ -169,7 +245,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
         #print(self.weights)
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
         max_len = 0
         total_len = 0
@@ -188,7 +264,7 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
 class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
 
-    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue]) -> str:
+    def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
         max_len = 0
         total_len = 0
@@ -236,8 +312,10 @@ class WikiMapper(RalfMapper):
             yield simpy.AnyOf(self.env, [q.wait() for q in self.source_queues.values()])
 
             # choose key
+            print("env time", self.env.now)
             chosen_key = self.key_selection_policy.choose(
-                self.source_queues
+                self.source_queues,
+                self.env.now*100
             )
             assert chosen_key is not None
 
@@ -267,12 +345,12 @@ init_data_file = config["simulation"]["init_data_file"]
 stream_edits_file = config["simulation"]["stream_edits_file"]
 stream_questions_file = config["simulation"]["stream_questions_file"]
 pageview_file = config["files"]["pageview_file"]
+timestamp_weights_file = config["files"]["timestamp_weights_file"]
 
 # load simulation data
 edits = json.load(open(stream_edits_file))
 init_data = json.load(open(init_data_file))
 keys = list(init_data.keys())
-ts_to_weights = json.load(open(config["files"]["weights"]))
 
 policies = {
     "fifo": fifo,
@@ -280,6 +358,7 @@ policies = {
     "always_process": always_process,
     "sample_half": make_sampling_policy(0.5),
     "weighted_random": WeightedLoadBalancer(pageview_file), 
+    "adaptive_weighted_random": AdaptiveWeightedLoadBalancer(timestamp_weights_file), 
     "weighted_longest_queue": WeightedLongestQueueLoadBalancer(pageview_file),
     "longest_queue": LongestQueueLoadBalancer(),
     "random": RandomLoadBalancer(),
@@ -287,17 +366,6 @@ policies = {
     "round_robin_fix": RoundRobinLoadBalancerFix(),
     "weighted_round_robin": WeightedRoundRobin(pageview_file, keys)
 }
-
-
-def current_weights(ts): 
-    min_dist = max(list(ts_to_weights.keys()))
-    weights = None
-    
-    for key in ts_to_weights.keys(): 
-        if abs(ts - key) <= min_dist:
-            min_dist = abs(ts - key)
-            weights = ts_to_weights[key]
-    return weights
 
 def run_once(
     out_path: str,
@@ -360,9 +428,9 @@ if __name__ == "__main__":
     # cross-key prioritzation: historical page views,
     # policies
     prioritization_policies = ["lifo"]  # ["fifo", "lifo"]
-    key_selection_policies = ["weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin", "round_robin_fix"]
+    key_selection_policies = ["adaptive_weighted_random", "weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin", "round_robin_fix"]
     load_shedding_policies = ["always_process"]
-    model_runtimes = [5] #, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    model_runtimes = [0.01, 0.05, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
     records_per_second = [100]
 
     output_files = []
