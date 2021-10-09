@@ -326,6 +326,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 queries.append([question, [answer], doc_id])
 
                 # append per query
+                print("staleness", timestep - latest)
                 staleness.append(timestep - latest)
 
             # dump CTX/question script

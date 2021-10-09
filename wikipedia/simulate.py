@@ -1,4 +1,4 @@
-import json
+import json 
 import itertools
 from typing import DefaultDict, Dict, List, Optional, Tuple
 from collections import defaultdict
@@ -78,14 +78,17 @@ class WeightedRoundRobin(CrossKeyLoadBalancer):
         self.cur_key_set = []
         self.cur_key_iter = None
         pageview_df = pd.read_csv(pageview_file)
-        self.raw_weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        #self.raw_weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        self.raw_weights = pageview_df.set_index("doc_id")["2021090300"].to_dict()
         self.weights = {}
         for key in self.raw_weights.keys(): 
             if str(key) not in all_keys: 
                 continue 
 
             self.weights[key] = int(self.raw_weights[key]*1000)
-            assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
+            #assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
+            if self.weights[key] == 0:
+                self.weights[key] = 1
         print(self.weights)
 
 
@@ -362,8 +365,7 @@ policies = {
     "weighted_longest_queue": WeightedLongestQueueLoadBalancer(pageview_file),
     "longest_queue": LongestQueueLoadBalancer(),
     "random": RandomLoadBalancer(),
-    "round_robin": RoundRobinLoadBalancer(),
-    "round_robin_fix": RoundRobinLoadBalancerFix(),
+    "round_robin": RoundRobinLoadBalancerFix(),
     "weighted_round_robin": WeightedRoundRobin(pageview_file, keys)
 }
 
@@ -428,9 +430,11 @@ if __name__ == "__main__":
     # cross-key prioritzation: historical page views,
     # policies
     prioritization_policies = ["lifo"]  # ["fifo", "lifo"]
-    key_selection_policies = ["adaptive_weighted_random", "weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin", "round_robin_fix"]
+    #key_selection_policies = ["adaptive_weighted_random", "weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin"]
+    key_selection_policies = ["round_robin"]
     load_shedding_policies = ["always_process"]
-    model_runtimes = [0.01, 0.05, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    #model_runtimes = [0.01, 0.05, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    model_runtimes = [0.02, 0.05, 0.07]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
     records_per_second = [100]
 
     output_files = []

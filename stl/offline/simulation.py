@@ -75,11 +75,11 @@ def main(argv):
     env = simpy.Environment()
     # source --source_to_window_queue--> window --windows_to_mapper_queue--> mapper
 
-    policy_plan_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
-    policy_params = json.load(open(policy_plan_path))
-
-    keys = policy_params.keys()
-    print(keys)
+    if FLAGS.per_key_slide_size_plan is not None:
+        policy_params = json.load(open(FLAGS.per_key_slide_size_plan))
+        keys = policy_params.keys()
+    else: 
+        keys = [i in range(FLAGS.num_keys)]
 
     source_to_window_queue = simpy.Store(env)
     windows_to_mapper_queue = {
@@ -88,7 +88,6 @@ def main(argv):
             processing_policy=prio_policies[FLAGS.key_prio_policy],
             load_shedding_policy=load_shed_policies[FLAGS.key_load_shed_policy],
         )
-        #for i in range(FLAGS.num_keys)
         for key in keys
     }
     Source(
@@ -98,14 +97,13 @@ def main(argv):
         next_queue=source_to_window_queue,
         total_run_time=FLAGS.total_runtime_s,
         keys=keys,
-        data_dir="/data/wooders/stl/yahoo/A4",
-        #data_file=FLAGS.source_data_path,
+        data_dir=FLAGS.source_data_path,
     )
     WindowOperator(
         env,
         window_size=FLAGS.window_size,
         slide_size=FLAGS.slide_size,
-        per_key_slide_size_path=policy_plan_path,
+        per_key_slide_size_path=FLAGS.per_key_slide_size_plan,
         source_queue=source_to_window_queue,
         next_queues=windows_to_mapper_queue,
     )
