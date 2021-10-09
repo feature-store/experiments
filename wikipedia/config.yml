@@ -7,6 +7,7 @@ parsed_tmp_dir = %(data_dir)s/parsed_tmp/
 diff_dir = %(data_dir)s/diffs/
 embedding_dir = %(data_dir)s/embeddings/
 exp_dir  = %(data_dir)s/simulation_output/
+dpr_dir = /home/eecs/wooders/DPR 
 
 [files]
 data_dir = /data/wooders/wikipedia

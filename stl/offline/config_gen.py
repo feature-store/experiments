@@ -95,7 +95,7 @@ def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss
     return plan_output, optimal_loss
 
 
-def get_loss_per_key(key: int, csv_dir)
+def get_loss_per_key(key: int, csv_dir):
     key_one = glob(f"{csv_dir}/slide_*_key_A4Benchmark-TS{key}.csv")
     assert len(key_one) > 0
 
