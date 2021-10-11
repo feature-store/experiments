@@ -95,7 +95,7 @@ pub fn redis_source<S: Scope + ScopeParent<Timestamp = usize>>(
             let opts = StreamReadOptions::default()
                 .block(1000)
                 .count(1)
-                .group("ralf-reader-group", "reader-0");
+                .group("ralf-reader-group", format!("reader-{}", info.global_id));
 
             move |output| {
                 let mut done = false;
