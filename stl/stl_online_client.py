@@ -52,7 +52,7 @@ def make_redis_producer():
 
 def snapshot_db_state(pkl_path):
     r = redis.Redis(db=FLAGS.redis_model_db_id)
-    state = {key: r.dump(key) for key in r.keys("*")}
+    state = {key: r.get(key) for key in r.keys("*")}
     print(f"state size: {len(state)}")
     # print(f"21 send time: {r.dumps('21/models/send_time')}")
     with open(pkl_path, "wb") as f:
@@ -70,6 +70,8 @@ def main(argv):
     exp_dir.mkdir(exist_ok=True, parents=True)
     with open(exp_dir / "client_config.json", "w") as f:
         json.dump(_get_config(), f)
+    dump_dir = exp_dir / "client_dump"
+    dump_dir.mkdir(exist_ok=True)
 
     producer = make_redis_producer()
     csv_files = glob(FLAGS.yahoo_csv_glob_path)
@@ -112,7 +114,7 @@ def main(argv):
         if time.time() - last_snapshot_time > FLAGS.redis_snapshot_interval_s:
             snapshot_relative_time = time.time() - start_time
             last_snapshot_time = time.time()
-            pkl_path = exp_dir / f"client_dump-{snapshot_relative_time}.pkl"
+            pkl_path = dump_dir / f"{snapshot_relative_time}.pkl"
             print("dumping to ", pkl_path)
             thread = threading.Thread(target=snapshot_db_state, args=(pkl_path,))
             thread.start()

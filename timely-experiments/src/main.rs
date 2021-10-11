@@ -5,10 +5,14 @@ extern crate differential_dataflow;
 extern crate timely;
 extern crate timely_experiments;
 
-use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+use std::{collections::HashMap, fs};
 
 use clap::{App, Arg};
 
+use serde_json::json;
 use timely_experiments::{
     operators::{fake_source, redis_source, MostRecent, STLFit, STLInference, ToRedis, Window},
     Record,
@@ -90,8 +94,8 @@ fn main() {
                 .default_value("100"),
         )
         .arg(
-            Arg::with_name("per_key_slide_size")
-                .long("per_key_slide_size")
+            Arg::with_name("per_key_slide_size_plan_path")
+                .long("per_key_slide_size_plan_path")
                 .takes_value(true)
                 .help("JSON file containing the slide size for each key."),
         )
@@ -128,6 +132,17 @@ fn main() {
                 .default_value("1000")
                 .help("in Hz. Only set this if using fake source"),
         )
+        .arg(
+            Arg::with_name("experiment_dir")
+                .long("experiment_dir")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("experiment_id")
+                .long("experiment_id")
+                .takes_value(true),
+        )
+        .arg(Arg::with_name("use_per_key_slide_size_plan").long("use_per_key_slide_size_plan"))
         .get_matches();
 
     let source = matches.value_of("source").unwrap();
@@ -146,9 +161,39 @@ fn main() {
     let num_keys = matches.value_of("num_keys").unwrap().parse().unwrap();
     let timesteps = matches.value_of("timesteps").unwrap().parse().unwrap();
     let send_rate = matches.value_of("send_rate").unwrap().parse().unwrap();
+    let experiment_dir = matches.value_of("experiment_dir").unwrap();
+    let experiment_id = matches.value_of("experiment_id").unwrap();
 
-    let per_key_slide_size = if let Some(filename) = matches.value_of("per_key_slide_size") {
-        Some(timely_experiments::parse_per_key_slide_size(filename))
+    // Write the config to a file
+    let server_config_json = json!(
+        {
+            "window_size": global_window_size,
+            "global_slide_size": global_slide_size,
+            "per_key_slide_size_plan_path": matches.value_of("per_key_slide_size_plan_path"),
+            "use_per_key_slide_size_plan": matches.is_present("use_per_key_slide_size_plan"),
+            "seasonality": seasonality,
+            "redis_model_db_id": 2, // Should be hard coded to 2.
+            "experiment_dir": experiment_dir,
+            "experiment_id": experiment_id,
+            "log_wandb": false,
+            "source_num_replicas": 1,
+            "window_num_replicas": 1,
+            "map_num_replicas": threads,
+            "sink_num_replicas": 1
+          }
+
+    );
+    let mut server_config_path = Path::new(experiment_dir).join(experiment_id);
+    fs::create_dir_all(server_config_path.as_path()).ok();
+    server_config_path.push("server_config.json");
+    let mut file = File::create(server_config_path.as_path()).unwrap();
+    file.write_all(server_config_json.to_string().as_bytes())
+        .ok();
+
+    let per_key_slide_size = if matches.value_of("use_per_key_slide_size_plan").is_some() {
+        Some(timely_experiments::parse_per_key_slide_size(
+            matches.value_of("per_key_slide_size_plan_path").unwrap(),
+        ))
     } else {
         None
     };

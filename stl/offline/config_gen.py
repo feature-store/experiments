@@ -22,6 +22,9 @@ flags.DEFINE_string(
     help="Output path for the slide size configuration json",
     required=True,
 )
+flags.DEFINE_integer(
+    "max_n_fits", None, "constraint the total n_fits, default to no constraint."
+)
 
 
 def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss"):
@@ -137,7 +140,9 @@ def main(argv):
     print(df.groupby("key")["loss"].describe().sample(10))
 
     print("generating lp config for min_loss")
-    lp_result, _loss = run_lp(df[["key", "n_fits", "loss"]], objective="min_loss")
+    lp_result, _loss = run_lp(
+        df[["key", "n_fits", "loss"]], objective="min_loss", max_n_fits=FLAGS.max_n_fits
+    )
 
     solution = pd.Series(lp_result).to_frame().reset_index()
     solution.columns = ["solution_key", "solution_n_fits"]

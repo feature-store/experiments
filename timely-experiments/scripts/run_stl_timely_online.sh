@@ -5,24 +5,29 @@ main() {
     EXP_DIR="./result/online_1_slide"
     EXP="experiment_$TIMESTAMP"
     
+    mkdir -p $EXP_DIR
+    
     # Turn off redis dump
     redis-server --save "" --appendonly no &
     
-    python stl_online_server.py \
+    cargo build --release
+    
+    # Don't cargo run here because we immediately send off the client
+    LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH" \
+    target/release/timely-experiments \
     --experiment_dir $EXP_DIR \
     --experiment_id $EXP \
-    --global_slide_size ${OVERRIDE_STATIC_SLIDE_SIZE:-48} \
-    --per_key_slide_size_plan_path ${OVERRIDE_PLAN_PATH:-"./offline/result/offline_1_slide/min_loss_plan.json"} \
+    --source=redis \
+    --global_window_size=336 \
+    --global_slide_size=${OVERRIDE_STATIC_SLIDE_SIZE:-48}  \
+    --per_key_slide_size_plan_path=${OVERRIDE_PLAN_PATH:-"./offline/result/offline_1_slide/min_loss_plan.json"} \
     ${POLICY_FLAGS} \
-    --seasonality 168 \
-    --window_size 336 \
-    --source_num_replicas 1 \
-    --window_num_replicas 4 \
-    --map_num_replicas ${OVERRIDE_MAPPER_REPLICAS:-4} \
-    --sink_num_replicas 2 \
-    &
+    --threads=${OVERRIDE_MAPPER_REPLICAS:-1} \
+    --seasonality=168 &
     
-    python stl_online_client.py \
+    timely_server_pid=$!
+    
+    python ../stl/stl_online_client.py \
     --experiment_dir $EXP_DIR \
     --experiment_id $EXP \
     --redis_snapshot_interval_s 2 \
@@ -31,15 +36,15 @@ main() {
     --yahoo_csv_glob_path '/home/ubuntu/ydata-labeled-time-series-anomalies-v1_0/A4Benchmark/A4Benchmark-TS*.csv' \
     --yahoo_csv_key_extraction_regex 'A4Benchmark-TS(\d+).csv'
     
-    # Ray stop should also stop that redis-server
-    ray stop --force
-    # Sleep to make sure ports are cleaned up
-    sleep 5
+    kill -9 $timely_server_pid
+    pkill -9 "redis-server"
     
-    python stl_online_eval.py \
+    python ../stl/stl_online_eval.py \
     --experiment_dir ${EXP_DIR}/${EXP} \
-    --send_rate_per_key 10
+    --send_rate_per_key 10 \
+    --is_timely_result
 }
+
 
 for n_trials in 1 2 3
 do
@@ -57,7 +62,7 @@ do
         do
             # Do once for dynamic window
             POLICY_FLAGS="--use_per_key_slide_size_plan" \
-            OVERRIDE_PLAN_PATH="./offline/result/offline_1_slide/min_loss_plan_max_fits_$max_n_fits.json" \
+            OVERRIDE_PLAN_PATH="../stl/offline/result/offline_1_slide/min_loss_plan_max_fits_$max_n_fits.json" \
             OVERRIDE_MAPPER_REPLICAS=$mapper_replicas \
             main
         done

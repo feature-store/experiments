@@ -19,14 +19,17 @@ from ralf.state import Record, Schema
 from ralf.table import Table
 from statsmodels.tsa.seasonal import STL
 
-from stl_offline_eval import SEASONALITY
 
+SEASONALITY = 24 * 7
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("window_size", 672, "window size for stl trainer")
 flags.DEFINE_integer("global_slide_size", 48, "static slide size configuration")
 flags.DEFINE_string(
     "per_key_slide_size_plan_path", "", "pre key slide size configuration"
+)
+flags.DEFINE_bool(
+    "use_per_key_slide_size_plan", False, "whether or not to use the per key plan"
 )
 flags.DEFINE_integer("seasonality", SEASONALITY, "seasonality for stl training process")
 flags.DEFINE_integer(
@@ -38,6 +41,11 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string("experiment_id", "", "experiment run name for wandb")
 flags.DEFINE_bool("log_wandb", False, "whether to use wandb logging")
+
+flags.DEFINE_integer("source_num_replicas", 1, "number of shard for source operator")
+flags.DEFINE_integer("window_num_replicas", 1, "number of shard for window operator")
+flags.DEFINE_integer("map_num_replicas", 1, "number of shard for map operator")
+flags.DEFINE_integer("sink_num_replicas", 1, "number of shard for sink operator")
 
 
 @ray.remote
@@ -87,7 +95,7 @@ class STLTrainer(Operator):
     def __init__(
         self,
         seasonality,
-        num_worker_threads=4,
+        num_worker_threads=1,
         processing_policy=processing_policy.last_completed,
         load_shedding_policy=load_shedding_policy.later_complete_time,
     ):
@@ -137,7 +145,7 @@ class RedisSink(Operator):
         self.redis_conn = Redis(db=db_id)
 
     def on_record(self, record: Record):
-        self.redis_conn.set(record.key, pickle.dumps(record))
+        self.redis_conn.set(record.key, pickle.dumps(record.entries))
 
 
 def create_stl_pipeline(metrics_dir):
@@ -152,7 +160,7 @@ def create_stl_pipeline(metrics_dir):
     source = Table(
         [],
         RedisSource,
-        num_replicas=2,
+        num_replicas=FLAGS.source_num_replicas,
         num_worker_threads=1,
     )
 
@@ -160,19 +168,21 @@ def create_stl_pipeline(metrics_dir):
         source.window(
             FLAGS.window_size,
             FLAGS.global_slide_size,
-            num_replicas=2,
+            num_replicas=FLAGS.window_num_replicas,
             num_worker_threads=1,
-            per_key_slide_size_plan_file=FLAGS.per_key_slide_size_plan_path,
+            per_key_slide_size_plan_file=FLAGS.per_key_slide_size_plan_path
+            if FLAGS.use_per_key_slide_size_plan
+            else None,
         )
         .map(
             STLTrainer,
             FLAGS.seasonality,
-            num_replicas=4,
+            num_replicas=FLAGS.map_num_replicas,
             num_worker_threads=1,
         )
         .map(
             RedisSink,
-            num_replicas=1,
+            num_replicas=FLAGS.sink_num_replicas,
             num_worker_threads=1,
             db_id=FLAGS.redis_model_db_id,
         )

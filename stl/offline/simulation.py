@@ -63,7 +63,7 @@ flags.DEFINE_string(
     None,
     "path to generated per key's window slide size config.",
 )
-flags.DEFINE_integer("num_mapper_replicas", None, "number of replicas for mapper")
+flags.DEFINE_integer("num_mapper_replicas", 1, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:
