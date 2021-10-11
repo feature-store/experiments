@@ -4,18 +4,25 @@ TIMESTAMP=$(date +%s)
 EXP_DIR="./result/online_1_slide"
 EXP="experiment_$TIMESTAMP"
 
+NUM_PROCESSES=3
+
 mkdir -p $EXP_DIR
 
 # Turn off redis dump
 redis-server --save "" --appendonly no &
 
-cargo run --release -- \
-    --source=redis \
-    --global_window_size=672 \
-    --global_slide_size=48 \
-    --per_key_slide_size=./result/min_loss_plan.json \
-    --threads=1
-    --seasonality=168 &
+for ((process_index=0; process_index<$NUM_PROCESSES; process_index++))
+do
+  cargo run --release -- \
+      --source=redis \
+      --global_window_size=672 \
+      --global_slide_size=48 \
+      --per_key_slide_size=./result/min_loss_plan.json \
+      --threads=1 \
+      --num_processes=$NUM_PROCESSES \
+      --process_index=$process_index \
+      --seasonality=168 &
+done
 
 python ../stl/stl_online_client.py \
   --experiment_dir $EXP_DIR --experiment_id $EXP \
