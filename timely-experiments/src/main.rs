@@ -27,11 +27,35 @@ fn run_experiment(
     timesteps: usize,
     send_rate_hz: f32,
     threads: usize,
+    process_index: usize,
+    num_processes: usize,
 ) {
     let source_str = source_str.to_string();
     // TODO: don't execute timely from args.
 
-    let config = timely::Config::process(threads);
+    // if num_processes == 1 {
+    // }
+
+    let config = if num_processes == 1 {
+        timely::Config::process(threads)
+    } else {
+        let mut addresses = vec![];
+        for index in 0..num_processes {
+            addresses.push(format!("localhost:{}", 2101 + index));
+        }
+
+        timely::Config {
+            communication: timely::CommunicationConfig::Cluster {
+                threads,
+                process: process_index,
+                addresses,
+                report: false,
+                log_fn: Box::new(|_| None),
+            },
+            worker: timely::WorkerConfig::default(),
+        }
+    };
+
     timely::execute(config, move |worker| {
         // TODO: look into using Timely Exchange operator to parition across worker processes.
         worker.dataflow(|scope| {
@@ -105,7 +129,20 @@ fn main() {
             Arg::with_name("threads")
                 .long("threads")
                 .takes_value(true)
+                .default_value("1")
+                .help("number of threads per process."),
+        )
+        .arg(
+            Arg::with_name("num_processes")
+                .long("num_processes")
+                .takes_value(true)
                 .default_value("1"),
+        )
+        .arg(
+            Arg::with_name("process_index")
+                .long("process_index")
+                .takes_value(true)
+                .default_value("0"),
         )
         .arg(
             Arg::with_name("num_keys")
@@ -143,6 +180,8 @@ fn main() {
         .unwrap();
     let seasonality = matches.value_of("seasonality").unwrap().parse().unwrap();
     let threads = matches.value_of("threads").unwrap().parse().unwrap();
+    let num_processes: usize = matches.value_of("num_processes").unwrap().parse().unwrap();
+    let process_index: usize = matches.value_of("process_index").unwrap().parse().unwrap();
     let num_keys = matches.value_of("num_keys").unwrap().parse().unwrap();
     let timesteps = matches.value_of("timesteps").unwrap().parse().unwrap();
     let send_rate = matches.value_of("send_rate").unwrap().parse().unwrap();
@@ -163,5 +202,7 @@ fn main() {
         timesteps,
         send_rate,
         threads,
+        process_index,
+        num_processes,
     )
 }
