@@ -1,8 +1,8 @@
 set -xe
 
-for key_policy in "random" "weighted_random" "round_robin" "weighted_round_robin"
+for key_policy in  "weighted_random" "weighted_round_robin"
 do
-	for event_policy in "fifo" "lifo" 
+	for event_policy in "lifo" 
 	do
 		for load_shedding_policy in "always_process"
 		do

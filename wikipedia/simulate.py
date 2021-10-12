@@ -83,16 +83,24 @@ class WeightedRoundRobin(CrossKeyLoadBalancer):
         self.cur_key_set = []
         self.cur_key_iter = None
         pageview_df = pd.read_csv(pageview_file)
-        #self.raw_weights = pageview_df.set_index("doc_id")["weights"].to_dict()
-        self.raw_weights = pageview_df.set_index("doc_id")["2021090300"].to_dict()
-        self.weights = {}
-        for key in self.raw_weights.keys(): 
-            if str(key) not in all_keys: 
-                continue 
 
-            self.weights[key] = int(self.raw_weights[key]*1000)
-            #assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
-            if self.weights[key] == 0:
+        self.weights = json.load(open("weights.json"))
+
+        ##self.raw_weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        #self.raw_weights = pageview_df.set_index("doc_id")["2021090300"].to_dict()
+        #self.weights = {}
+        #for key in self.raw_weights.keys(): 
+        #    if str(key) not in all_keys: 
+        #        continue 
+
+        #    self.weights[key] = int(self.raw_weights[key]*1000)
+        #    #assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
+        #    if self.weights[key] == 0:
+        #        self.weights[key] = 1
+
+
+        for key in all_keys: 
+            if key not in self.weights: 
                 self.weights[key] = 1
 
 
@@ -175,7 +183,8 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
 
     def __init__(self, pageview_file):
         pageview_df = pd.read_csv(pageview_file)
-        self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        #self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
+        self.weights = json.load(open("weights.json"))
 
     def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
@@ -338,11 +347,22 @@ class WikiMapper(RalfMapper):
 config = configparser.ConfigParser()
 config.read("config.yml")
 plan_dir = config["simulation"]["plan_dir"]
-init_data_file = config["simulation"]["init_data_file"]
-stream_edits_file = config["simulation"]["stream_edits_file"]
-stream_questions_file = config["simulation"]["stream_questions_file"]
-pageview_file = config["files"]["pageview_file"]
-timestamp_weights_file = config["files"]["timestamp_weights_file"]
+#init_data_file = config["simulation"]["init_data_file"]
+#stream_edits_file = config["simulation"]["stream_edits_file"]
+#stream_questions_file = config["simulation"]["stream_questions_file"]
+#pageview_file = config["files"]["pageview_file"]
+#timestamp_weights_file = config["files"]["timestamp_weights_file"]
+
+run = wandb.init(job_type="dataset-creation", project="wiki-workload")
+question_dir = run.use_artifact('ucb-ralf/wiki-workload /questions:v2', type='dataset').download()
+simulation_dir = run.use_artifact('ucb-ralf/wiki-workload /simulation:v2', type='dataset').download()
+pageview_dir = run.use_artifact('ucb-ralf/wiki-workload /pageviews:v0', type='dataset').download()
+
+init_data_file = f"{simulation_dir}/init_data.json"
+stream_edits_file = f"{simulation_dir}/edit_stream.json"
+stream_questions_file = f"{simulation_dir}/question_stream.json"
+pageview_file = f"{pageview_dir}/pageviews.csv"
+timestamp_weights_file = f"{pageview_dir}/timestamp_weights_file.json"
 
 # load simulation data
 edits = json.load(open(stream_edits_file))
@@ -429,7 +449,8 @@ if __name__ == "__main__":
     parser.add_argument("--load_shedding_policy", type=str)
     args = parser.parse_args()
 
-    out_path = f"{plan_dir}/plan-{args.key_policy}_{args.event_policy}-{args.load_shedding_policy}-{args.model_runtime}-{args.send_rate}.json"
+    plan_name = f"{plan_dir}/plan-{args.key_policy}_{args.event_policy}-{args.load_shedding_policy}-{args.model_runtime}-{args.send_rate}"
+    out_path = f"{plan_name}.json"
     print(out_path)
     run_once(
         out_path=out_path,
@@ -441,8 +462,7 @@ if __name__ == "__main__":
         model_runtime_constant=args.model_runtime,
         key_selection_policy=args.key_policy,
     )
-    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
-    log_plans(run, config, out_path)
+    log_plans(run, config, plan_dir)
 
 
     # load sheding: random, drop short edits

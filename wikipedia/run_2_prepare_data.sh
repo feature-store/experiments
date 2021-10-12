@@ -10,7 +10,7 @@ do
 		do
 			for model_runtime in 0.01 0.05 0.1 1 5 10
 			do
-				python wiki_eval.py --offline-plan-path ${plan_dir}/plan-${key_policy}_${event_policy}-${load_shedding_policy}-${model_runtime}-100.json
+				python wiki_eval.py --offline-plan-path ${plan_dir}/plan-${key_policy}_${event_policy}-${load_shedding_policy}-${model_runtime}-100.json --wandb
 			done
 		done
 	done

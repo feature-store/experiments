@@ -5,7 +5,7 @@ dpr_dir=~/DPR
 
 cd $dpr_dir
 
-for key_policy in "round_robin" "weighted_round_robin" 
+for key_policy in  "weighted_round_robin" #"round_robin"
 #for key_policy in "random" "weighted_random"
 do
 	for event_policy in "lifo"
@@ -16,10 +16,10 @@ do
 			do
 				plan_file=plan-${key_policy}_${event_policy}-${load_shedding_policy}-${model_runtime}-100
 				echo $plan_file
-				CUDA_VISIBLE_DEVICES=1,2,5 bash ${dpr_dir}/evaluate_retrieval_single_doc_stream.sh $plan_file & 
+				CUDA_VISIBLE_DEVICES=3,4,5 bash ${dpr_dir}/evaluate_retrieval_single_doc_stream.sh $plan_file & 
 				pid=$!
 			done
-			#wait $pid
+			wait $pid
 		done
 	done
 done 
