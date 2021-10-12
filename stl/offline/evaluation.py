@@ -43,14 +43,11 @@ SEASONALITY = 24 * 7
 def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
 
     # get plan DF for key
-    param_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
-    policy_params = json.load(open(param_path))
     plan_df = pd.read_json(plan_json_path)
     plan_df_key = plan_df[plan_df["key"] == int(key)]
     plan_df_key.index = pd.RangeIndex(start=0, stop=len(plan_df_key.index))
 
     # get original data
-    print(yahoo_csv_path)
     df = pd.read_csv(yahoo_csv_path)
     df["timestamp"] = list(range(len(df)))
 
@@ -72,7 +69,6 @@ def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
         #print("fit time", time.time() - st)
         offline_stl[row.processing_time] = trained
 
-    print(offline_stl)
 
     # Assign the trained model with every events in the source file.
     def find_freshest_model_version(event_time, model_versions):

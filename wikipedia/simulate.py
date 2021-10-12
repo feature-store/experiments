@@ -7,8 +7,11 @@ from functools import cmp_to_key
 import random
 
 import configparser
+import argparse
 
 import pandas as pd
+
+import wandb
 
 import simpy
 from ralf.state import Record
@@ -38,6 +41,8 @@ from ralf.policies.load_shedding_policy import (
 )
 
 from typing import Dict, List, Tuple, Type
+
+from preprocessing.log_data import log_plans
 
 def current_weights(ts, ts_to_weights): 
     ts = int(ts)
@@ -89,15 +94,12 @@ class WeightedRoundRobin(CrossKeyLoadBalancer):
             #assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
             if self.weights[key] == 0:
                 self.weights[key] = 1
-        print(self.weights)
 
 
         for key in self.weights.keys(): 
             for i in range(self.weights[key]):
                 self.cur_key_set.append(str(key))
         random.shuffle(self.cur_key_set)
-        print(self.cur_key_set)
-        print("size", len(self.cur_key_set))
         self.cur_key_iter = itertools.cycle(self.cur_key_set)
 
 
@@ -125,15 +127,12 @@ class AdaptiveWeightedRoundRobin(CrossKeyLoadBalancer):
 
             self.weights[key] = int(self.raw_weights[key]*1000)
             assert self.weights[key] > 0, f"Too small {key}, {self.raw_weights[key]}"
-        print(self.weights)
 
 
         for key in self.weights.keys(): 
             for i in range(self.weights[key]):
                 self.cur_key_set.append(str(key))
         random.shuffle(self.cur_key_set)
-        print(self.cur_key_set)
-        print("size", len(self.cur_key_set))
         self.cur_key_iter = itertools.cycle(self.cur_key_set)
 
 
@@ -168,10 +167,7 @@ class AdaptiveWeightedLoadBalancer(CrossKeyLoadBalancer):
                 keys.append(key)
                 weights.append(weights_map[key])
             total_len += size
-        print(weights)
-        print(keys)
         chosen_key = random.choices(keys, weights, k=1)[0]
-        print("choose", chosen_key, keys, weights)
         return chosen_key
 
 
@@ -180,7 +176,6 @@ class WeightedLoadBalancer(CrossKeyLoadBalancer):
     def __init__(self, pageview_file):
         pageview_df = pd.read_csv(pageview_file)
         self.weights = pageview_df.set_index("doc_id")["weights"].to_dict()
-        #print(self.weights)
 
     def choose(self, per_key_queues: Dict[str, PerKeyPriorityQueue], ts) -> str:
         chosen_key = None
@@ -278,7 +273,6 @@ class LongestQueueLoadBalancer(CrossKeyLoadBalancer):
                 max_len = size
             total_len += size
         per_key_queues[chosen_key].clear()
-        print("clear", chosen_key, total_len, per_key_queues[chosen_key].size())
 
         return chosen_key
 
@@ -372,7 +366,7 @@ policies = {
 def run_once(
     out_path: str,
     prioritization_policy: str,
-    load_sheeding_policy: str,
+    load_shedding_policy: str,
     keys: List[str],
     per_key_records_per_second: int,
     total_runtime_s: float,
@@ -387,7 +381,7 @@ def run_once(
         key: PerKeyPriorityQueue(
             env,
             processing_policy=policies[prioritization_policy],
-            load_shedding_policy=policies[load_sheeding_policy],
+            load_shedding_policy=policies[load_shedding_policy],
         )
         for key in keys
     }
@@ -425,41 +419,67 @@ def run_once(
 
 if __name__ == "__main__":
 
+    # argument flags
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--send_rate", type=int)
+    parser.add_argument("--model_runtime", type=float)
+    parser.add_argument("--total_runtime", type=float, default=len(edits))
+    parser.add_argument("--event_policy", type=str)
+    parser.add_argument("--key_policy", type=str)
+    parser.add_argument("--load_shedding_policy", type=str)
+    args = parser.parse_args()
+
+    out_path = f"{plan_dir}/plan-{args.key_policy}_{args.event_policy}-{args.load_shedding_policy}-{args.model_runtime}-{args.send_rate}.json"
+    print(out_path)
+    run_once(
+        out_path=out_path,
+        prioritization_policy=args.event_policy,
+        load_shedding_policy=args.load_shedding_policy,
+        keys=keys,
+        per_key_records_per_second=args.send_rate,
+        total_runtime_s=args.total_runtime,
+        model_runtime_constant=args.model_runtime,
+        key_selection_policy=args.key_policy,
+    )
+    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
+    log_plans(run, config, out_path)
+
+
     # load sheding: random, drop short edits
     # prioritization: prioritize most recent version
     # cross-key prioritzation: historical page views,
     # policies
-    prioritization_policies = ["lifo"]  # ["fifo", "lifo"]
-    #key_selection_policies = ["adaptive_weighted_random", "weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin"]
-    key_selection_policies = ["round_robin"]
-    load_shedding_policies = ["always_process"]
-    #model_runtimes = [0.01, 0.05, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
-    model_runtimes = [0.02, 0.05, 0.07]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
-    records_per_second = [100]
+    #prioritization_policies = ["lifo"]  # ["fifo", "lifo"]
+    ##key_selection_policies = ["adaptive_weighted_random", "weighted_round_robin", "weighted_random", "weighted_longest_queue", "longest_queue", "random", "round_robin"]
+    #key_selection_policies = ["round_robin"]
+    #load_shedding_policies = ["always_process"]
+    ##model_runtimes = [0.01, 0.05, 0.1, 1, 5, 10]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    #model_runtimes = [0.02, 0.05, 0.07]  # [0.000001, 0.00001, 0.0000001, 0.000000001, 0]
+    #records_per_second = [100]
 
-    output_files = []
+    #output_files = []
 
-    for key_selection in key_selection_policies:
-        for prio_policy in prioritization_policies:
-            for load_shed_policy in load_shedding_policies:
-                for runtime in model_runtimes:
-                    for rate in records_per_second:
+    #for key_selection in key_selection_policies:
+    #    for prio_policy in prioritization_policies:
+    #        for load_shed_policy in load_shedding_policies:
+    #            for runtime in model_runtimes:
+    #                for rate in records_per_second:
 
-                        out_path = f"{plan_dir}/plan-{key_selection}_{prio_policy}-{load_shed_policy}-{runtime}-{rate}.json"
-                        print("running", out_path, runtime)
-                        run_once(
-                            out_path,
-                            prio_policy,
-                            load_shed_policy,
-                            keys,
-                            per_key_records_per_second=rate,
-                            total_runtime_s=len(edits),
-                            model_runtime_constant=runtime,
-                            key_selection_policy=key_selection,
-                        )
+    #                    out_path = f"{plan_dir}/plan-{key_selection}_{prio_policy}-{load_shed_policy}-{runtime}-{rate}.json"
+    #                    print("running", out_path, runtime)
+    #                    run_once(
+    #                        out_path,
+    #                        prio_policy,
+    #                        load_shed_policy,
+    #                        keys,
+    #                        per_key_records_per_second=rate,
+    #                        total_runtime_s=len(edits),
+    #                        model_runtime_constant=runtime,
+    #                        key_selection_policy=key_selection,
+    #                    )
 
-                        output_files.append(out_path)
-                        print("DONE", out_path)
-    for f in output_files:
-        print(f)
-    open("plans.txt", "w").write("\n".join(output_files))
+    #                    output_files.append(out_path)
+    #                    print("DONE", out_path)
+    #for f in output_files:
+    #    print(f)
+    #open("plans.txt", "w").write("\n".join(output_files))
