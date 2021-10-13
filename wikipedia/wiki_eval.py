@@ -75,7 +75,9 @@ parser.add_argument("--embed", default=False, action="store_true")
 parser.add_argument("--wandb", default=False, action="store_true")
 args = parser.parse_args()
 
+exp_id = os.path.basename(args.offline_plan_path).replace(".json", "")
 run.config.update(vars(args))
+run.config.update({"plan": exp_id})
 
 def sents_to_passages(sents, num_sent_in_pass=10):
     passages = []
@@ -303,18 +305,15 @@ def generate_question_data(questions, embed_filename, directory):
 
             assert len(passage_ctx) == len(passage_texts)
             assert len(passage_embeddings) == len(passage_texts)
+    print("staleness", np.array(staleness).mean())
     return staleness
 
 def main():
+   
 
-    plan_file = (
-        args.offline_plan_path
-    )  # "wiki-plans/plan-fifo-always_process-1-0.001-60.json"
-    exp_id = os.path.basename(plan_file).replace(".json", "")
-    
-    #embed_filename = offline_eval(plan_file, exp_id, compute_embeddings=args.embed)
+    embed_filename = offline_eval(args.offline_plan_path, exp_id, compute_embeddings=args.embed)
 
-    embed_filename = "embed_versions.pkl"
+    #embed_filename = "embed_versions.pkl"
     generate_question_data_all(exp_id, embed_filename)
     if args.wandb:
         import wandb

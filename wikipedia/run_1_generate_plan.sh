@@ -1,6 +1,6 @@
 set -xe
 
-for key_policy in  "weighted_random" "weighted_round_robin"
+for key_policy in  "random" "round_robin"
 do
 	for event_policy in "lifo" 
 	do
