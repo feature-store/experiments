@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::Hash};
 
 use abomonation::Abomonation;
 
@@ -7,11 +7,11 @@ use differential_dataflow::Data;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict};
 
-pub trait RecordKey: Data + Clone + Abomonation {}
-impl<T: Data + Clone + Abomonation> RecordKey for T {}
+pub trait RecordKey: Data + Clone + Abomonation + Hash + Send {}
+impl<T: Data + Clone + Abomonation + Hash + Send> RecordKey for T {}
 
-pub trait RecordValue: PartialEq + Clone + Abomonation {}
-impl<T: PartialEq + Clone + Abomonation> RecordValue for T {}
+pub trait RecordValue: PartialEq + Clone + Abomonation + Send {}
+impl<T: PartialEq + Clone + Abomonation + Send> RecordValue for T {}
 
 #[derive(Clone, abomonation_derive::Abomonation, Hash)]
 pub struct Record<K: RecordKey, V: RecordValue> {
@@ -58,7 +58,7 @@ impl<K: RecordKey, V: RecordValue> Eq for Record<K, V> {
     fn assert_receiver_is_total_eq(&self) {}
 }
 
-impl<K: RecordKey, V: PartialEq + Debug + Clone + Abomonation> Debug for Record<K, V> {
+impl<K: RecordKey, V: RecordValue + Debug> Debug for Record<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
