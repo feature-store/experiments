@@ -59,8 +59,6 @@ where
     // TODO: find a better way to do LIFO than offloading work in a thread,
     // and sending once the thread has completed and a new window arrives.
     fn stl_fit_lifo(&self, seasonality: usize) -> Collection<S, (K, Record<K, Vec<u8>>)> {
-        // A hashmap of windows in LIFO ordering.
-        let mut queues: HashMap<K, BinaryHeap<(usize, Vec<Record<K, V>>)>> = HashMap::new();
         // Spawn worker thread which pulls new records to compute and returns values.
         let (operator_tx, worker_rx) = mpsc::channel();
         let (worker_tx, operator_rx) = mpsc::channel();
@@ -77,8 +75,13 @@ where
             })
             .unwrap();
 
+        // A hashmap of windows in LIFO ordering.
+        let mut queues: HashMap<K, BinaryHeap<(usize, Vec<Record<K, V>>)>> = HashMap::new();
+        // Tracks the inserted keys for round-robin.
+        let mut keys = vec![];
         // Used for round-robin processing of keys.
-        let mut iter = 0;
+        let mut round_robin_idx = 0;
+        // Tracks the total number of items inserted.
         let mut num_items = 0;
 
         self.flat_map(move |(k, window)| {
@@ -90,19 +93,18 @@ where
             }
 
             // Add to queue.
+            if !queues.contains_key(&k) {
+                keys.push(k.clone());
+            }
             let entry = queues.entry(k).or_default();
             entry.push((window[0].timestamp, window));
 
             if let Ok(record) = operator_rx.try_recv() {
-                // Spawn the next task.
-                let mut keys: Vec<_> = queues.keys().cloned().collect();
-                keys.sort();
-
                 // Choose the next heap containing a window.
                 let mut heap_option = None;
                 for _ in 0..keys.len() {
-                    iter = (iter + 1) % keys.len();
-                    heap_option = queues.get_mut(&keys[iter]);
+                    round_robin_idx = (round_robin_idx + 1) % keys.len();
+                    heap_option = queues.get_mut(&keys[round_robin_idx]);
                     if let Some(heap) = heap_option.as_ref() {
                         if !heap.is_empty() {
                             break;
