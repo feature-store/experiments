@@ -4,7 +4,7 @@ PLAN_DIR="/data/wooders/stl/results"
 TRAIN_PATH="./yahoo_train_data"
 EVAL_PATH="./yahoo_eval_data"
 
-for key_policy in "lifo" "fifo"
+for key_policy in "fifo"
 do
 for replicas in 1 2 4 8
 do 
