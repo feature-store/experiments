@@ -76,6 +76,7 @@ def plot_system_metrics(df: pd.DataFrame, plot_save_path: str):
     plt.savefig(plot_save_path)
 
 
+# TODO: fill in model from 1st window if none exists.
 def eval_stl_metrics_df(experiment_dir, is_timely_dump=False):
     db_state = {}
     for path in glob(f"{experiment_dir}/client_dump/*"):

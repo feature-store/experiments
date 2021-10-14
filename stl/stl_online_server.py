@@ -73,7 +73,7 @@ class RedisSource(Source):
             f"reader-{self._shard_idx}",
             {"ralf": ">"},
             count=1,
-            block=100 * 1000,
+            block=5 * 60 * 1000, # minutes
         )[0]
         record_id, payload = data[0]
         self.last_record = record_id

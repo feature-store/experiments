@@ -87,9 +87,35 @@ def main(argv):
     max_timestep = max(map(len, loaded_values.values()))
     print(f"Loaded {len(loaded_values)} files.")
 
+    # Initialize from 1st window.
+    from statsmodels.tsa.seasonal import STL
+    from ralf.state import Record
+    import pickle
+
+    WINDOW_SIZE = 336
+    SEASONALITY = 168
+    redis_conn = redis.Redis(db=2)
+    for key, time_series in loaded_values.items():
+        # print(list(time_series[:10]))
+        stl_result = STL(list(time_series[:WINDOW_SIZE]), period=SEASONALITY, robust=True).fit()
+        # print(len(stl_result.seasonal))
+        # print(stl_result.trend)
+        record = Record(
+            key=key,
+            trend=stl_result.trend[-1],
+            seasonality=list(stl_result.seasonal[-(SEASONALITY + 1) : -1]),
+            create_time=time.time(),
+            complete_time=time.time(),
+            timestamp=WINDOW_SIZE,
+        )
+        redis_conn.set(key, pickle.dumps(record.entries))
+    print("Initialized models for each key")
+
+
+
     start_time = time.time()
     last_snapshot_time = time.time()
-    for i in range(max_timestep):
+    for i in range(WINDOW_SIZE, max_timestep):
         send_start = time.time()
         for key, time_series in loaded_values.items():
             if i < len(time_series):
