@@ -1,12 +1,10 @@
 use std::{
     collections::{BinaryHeap, HashMap},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc,
     thread,
 };
 
-use timely::dataflow::{
-    channels::pact::Pipeline, operators::Map, operators::Operator, Scope, Stream,
-};
+use timely::dataflow::{operators::Map, Scope};
 
 use differential_dataflow::{AsCollection, Collection};
 
