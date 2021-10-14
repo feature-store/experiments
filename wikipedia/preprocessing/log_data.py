@@ -8,6 +8,8 @@ def log_questions(run, config):
     artifact = wandb.Artifact("questions", type='dataset')
     artifact.add_file(config["files"]["raw_questions_file"])
     artifact.add_file(config["files"]["questions_file"])
+    artifact.add_file(config["files"]["test_questions_file"])
+    artifact.add_file(config["files"]["train_questions_file"])
     run.log_artifact(artifact)
 
 def log_files(run, config):

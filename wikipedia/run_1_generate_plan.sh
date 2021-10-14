@@ -1,16 +1,19 @@
 set -xe
 
-for key_policy in  "random"  "weighted_random" "round_robin" "weighted_round_robin"
+for replicas in 2 4 8 1
 do
-	for event_policy in "lifo" "fifo" 
+	for model_runtime in 0.25 
 	do
-		for load_shedding_policy in "always_process"
+		for event_policy in "lifo" #"fifo" 
 		do
-			for model_runtime in 0.25 0.005
+			for load_shedding_policy in "always_process"
 			do
-				python simulate.py --model_runtime $model_runtime --send_rate 100 \
-					--event_policy  $event_policy --key_policy $key_policy --load_shedding_policy $load_shedding_policy
+				for key_policy in  "round_robin" "weighted_round_robin"
+				do
+					python simulate.py --model_runtime $model_runtime --send_rate 100 \
+						--event_policy  $event_policy --key_policy $key_policy --load_shedding_policy $load_shedding_policy --num_replicas ${replicas}
+				done
 			done
 		done
-	done
-done 
+	done 
+done
