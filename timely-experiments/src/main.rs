@@ -23,6 +23,7 @@ fn run_experiment(
     global_slide_size: usize,
     per_key_slide_size: Option<HashMap<usize, usize>>,
     seasonality: usize,
+    prioritization: &str,
     num_keys: usize,
     timesteps: usize,
     send_rate_hz: f32,
@@ -31,10 +32,7 @@ fn run_experiment(
     num_processes: usize,
 ) {
     let source_str = source_str.to_string();
-    // TODO: don't execute timely from args.
-
-    // if num_processes == 1 {
-    // }
+    let prioritization_str = prioritization.to_string();
 
     let config = if num_processes == 1 {
         timely::Config::process(threads)
@@ -69,7 +67,11 @@ fn run_experiment(
             } else {
                 source.sliding_window(global_window_size, global_slide_size)
             };
-            let models = windows.stl_fit(seasonality);
+            let models = match prioritization_str.as_str() {
+                "fifo" => windows.stl_fit(seasonality),
+                "lifo" => windows.stl_fit_lifo(seasonality),
+                _ => panic!("Unsupported prioritization strategy."),
+            };
             models.to_redis();
 
             // models.inspect(|((k, v), t, count)| {
@@ -126,6 +128,13 @@ fn main() {
                 .default_value("4"),
         )
         .arg(
+            Arg::with_name("prioritization")
+                .long("prioritization")
+                .takes_value(true)
+                .default_value("fifo")
+                .help("STL prioritization strategy. Either 'lifo' or 'fifo'"),
+        )
+        .arg(
             Arg::with_name("threads")
                 .long("threads")
                 .takes_value(true)
@@ -179,6 +188,7 @@ fn main() {
         .parse()
         .unwrap();
     let seasonality = matches.value_of("seasonality").unwrap().parse().unwrap();
+    let prioritization: String = matches.value_of("prioritization").unwrap().parse().unwrap();
     let threads = matches.value_of("threads").unwrap().parse().unwrap();
     let num_processes: usize = matches.value_of("num_processes").unwrap().parse().unwrap();
     let process_index: usize = matches.value_of("process_index").unwrap().parse().unwrap();
@@ -198,6 +208,7 @@ fn main() {
         global_slide_size,
         per_key_slide_size,
         seasonality,
+        &prioritization,
         num_keys,
         timesteps,
         send_rate,

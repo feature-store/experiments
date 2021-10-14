@@ -21,7 +21,8 @@ do
       --threads=1 \
       --num_processes=$NUM_PROCESSES \
       --process_index=$process_index \
-      --seasonality=168 &
+      --seasonality=168 
+      --prioritization=lifo &
 done
 
 python ../stl/stl_online_client.py \
