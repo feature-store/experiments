@@ -424,6 +424,8 @@ def generate_simulation_data(
                     row["old_revid"]
                 ), f"Invalid id {filename}, id {data['orig_id']} row {row['revid']}"
 
+                # get length of passage
+
                 if key not in init_data:
                     diffs = data["diffs"][0]
                     init_data[key] = {

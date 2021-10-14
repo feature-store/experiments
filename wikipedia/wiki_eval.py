@@ -234,7 +234,7 @@ def generate_question_data_all(exp_id, embed_filename):
 
     chunk_size = 1000
     chunks = [(questions[i:i+chunk_size], embed_filename, directory) for i in range(0, len(questions), chunk_size)]
-    p = Pool(128) 
+    p = Pool(64) 
     staleness_all = p.starmap(generate_question_data, chunks)
     p.close()
     staleness_all = [item for sublist in staleness_all for item in sublist]
@@ -315,10 +315,10 @@ def main():
 
     #embed_filename = "embed_versions.pkl"
     generate_question_data_all(exp_id, embed_filename)
-    if args.wandb:
-        import wandb
-        run = wandb.init(job_type="dataset-creation", project="wiki-workload")
-        log_plan_data(run, config, exp_id, output_dir)
+    #if args.wandb:
+    #    import wandb
+    #    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
+    #    log_plan_data(run, config, exp_id, output_dir)
 
 
 if __name__ == "__main__":

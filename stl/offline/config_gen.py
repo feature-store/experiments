@@ -6,7 +6,6 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from absl import app, flags
-from ortools.linear_solver import pywraplp
 from sktime.performance_metrics.forecasting import mean_squared_scaled_error
 
 FLAGS = flags.FLAGS
@@ -23,8 +22,30 @@ flags.DEFINE_string(
     required=True,
 )
 
+# TODO(simon): add flags for lp solver constraint
+flags.DEFINE_integer(
+    "max_n_fits",
+    default=None,
+    help="Max fits for LP",
+    required=False,
+)
 
-def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss"):
+flags.DEFINE_integer(
+    "max_loss",
+    default=None,
+    help="Max loss for LP",
+    required=False,
+)
+
+flags.DEFINE_string(
+    "objective",
+    default="min_loss",
+    help="LP optimization goal",
+    required=False,
+)
+
+def run_lp(df: pd.DataFrame, objective="min_loss"):
+    from ortools.linear_solver import pywraplp
     """Run through mixed integer program to generate the best plan.
 
     Input:
@@ -35,6 +56,8 @@ def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss
     Output:
         plan(Dict[str, int]): a dictionary mapping key -> optimal n_fits such that loss is minimal.
     """
+    max_n_fits = FLAGS.max_n_fits
+    max_loss = FLAGS.max_loss
     assert all(df.columns == ["key", "n_fits", "loss"])
     assert objective in {"min_loss", "min_fits"}
 

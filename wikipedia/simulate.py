@@ -294,9 +294,10 @@ class WikiMapper(RalfMapper):
         key_selection_policy_cls: Type[CrossKeyLoadBalancer],
         model_run_time_s: float,
         keys: List[str],
+        num_replicas: int = 1,
     ) -> None:
 
-        super().__init__(env, source_queues, key_selection_policy_cls, model_run_time_s)
+        super().__init__(env, source_queues, key_selection_policy_cls, model_run_time_s, num_replicas)
         self.keys = keys
         self.source_queues = source_queues
 
@@ -340,6 +341,14 @@ class WikiMapper(RalfMapper):
             else:
                 self.ready_time_to_batch[self.env.now] = edits
 
+            # TODO: Add variable runtime 
+
+            filename = f"{diff_dir}/{edits[0][0]}"
+            data = json.load(open(filename))
+            num_passages = int(len(data["diffs"][0]) / 10)
+            runtime = self.model_runtime_s * num_passages
+            #print(runtime, num_passages)
+
             yield self.env.timeout(self.model_runtime_s)
 
 
@@ -347,6 +356,7 @@ class WikiMapper(RalfMapper):
 config = configparser.ConfigParser()
 config.read("config.yml")
 plan_dir = config["simulation"]["plan_dir"]
+diff_dir = config["directory"]["diff_dir"]
 #init_data_file = config["simulation"]["init_data_file"]
 #stream_edits_file = config["simulation"]["stream_edits_file"]
 #stream_questions_file = config["simulation"]["stream_questions_file"]
@@ -391,7 +401,8 @@ def run_once(
     per_key_records_per_second: int,
     total_runtime_s: float,
     model_runtime_constant: float,
-    key_selection_policy: str
+    key_selection_policy: str,
+    num_replicas: int,
 ):
 
     env = simpy.Environment()
@@ -429,6 +440,7 @@ def run_once(
         model_run_time_s=model_runtime_constant,
         key_selection_policy_cls=policies[key_selection_policy],
         keys=keys,
+        num_replicas=num_replicas,
     )
     env.run(until=total_runtime_s)
 
@@ -447,9 +459,10 @@ if __name__ == "__main__":
     parser.add_argument("--event_policy", type=str)
     parser.add_argument("--key_policy", type=str)
     parser.add_argument("--load_shedding_policy", type=str)
+    parser.add_argument("--num_replicas", type=int)
     args = parser.parse_args()
 
-    plan_name = f"{plan_dir}/plan-{args.key_policy}_{args.event_policy}-{args.load_shedding_policy}-{args.model_runtime}-{args.send_rate}"
+    plan_name = f"{plan_dir}/plan-{args.key_policy}_{args.event_policy}-{args.load_shedding_policy}-{args.model_runtime}-{args.send_rate}_replicas_{args.num_replicas}"
     out_path = f"{plan_name}.json"
     print(out_path)
     run_once(
@@ -461,6 +474,7 @@ if __name__ == "__main__":
         total_runtime_s=args.total_runtime,
         model_runtime_constant=args.model_runtime,
         key_selection_policy=args.key_policy,
+        num_replicas=args.num_replicas,
     )
     log_plans(run, config, plan_dir)
 

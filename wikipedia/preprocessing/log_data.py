@@ -53,6 +53,9 @@ def log_experiment(run, config):
     for filename in files: 
         if "plan-" in filename and '.json' in filename:
             artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
+        if "plan-" in filename and '.pkl' in filename:
+            artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
+
     run.log_artifact(artifact)
 
 if __name__ == "__main__":

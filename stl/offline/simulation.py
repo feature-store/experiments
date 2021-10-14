@@ -26,7 +26,7 @@ load_shed_policies = {
 
 flags.DEFINE_enum(
     "key_prio_policy",
-    "fifo",
+    "lifo",
     list(prio_policies.keys()),
     "The prioritization policy for a given key.",
 )
@@ -63,7 +63,7 @@ flags.DEFINE_string(
     None,
     "path to generated per key's window slide size config.",
 )
-flags.DEFINE_integer("num_mapper_replicas", 10, "number of replicas for mapper")
+flags.DEFINE_integer("num_mapper_replicas", 1, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:
@@ -79,7 +79,9 @@ def main(argv):
         policy_params = json.load(open(FLAGS.per_key_slide_size_plan))
         keys = policy_params.keys()
     else: 
-        keys = [i in range(FLAGS.num_keys)]
+        keys = [i+1 for i in range(FLAGS.num_keys)]
+
+    print("keys", keys)
 
     source_to_window_queue = simpy.Store(env)
     windows_to_mapper_queue = {
@@ -112,7 +114,7 @@ def main(argv):
         source_queues=windows_to_mapper_queue,
         model_run_time_s=FLAGS.model_runtime_s,
         # TODO(simon): customize this once we want different key selection policy
-        key_selection_policy_cls=RoundRobinLoadBalancer(),
+        key_selection_policy_cls=RoundRobinLoadBalancer(FLAGS.num_mapper_replicas),
         num_replicas=FLAGS.num_mapper_replicas,
     )
     env.run(until=FLAGS.total_runtime_s)
