@@ -5,7 +5,7 @@ dpr_dir=~/DPR
 
 cd $dpr_dir
 
-for replicas in 6 8
+for replicas in 16 32
 do
 for event_policy in "lifo"
 do
@@ -19,7 +19,7 @@ do
 				#plan_file=plan-${key_policy}_${event_policy}-${load_shedding_policy}-${model_runtime}-100
 				plan_file=plan-${key_policy}_${event_policy}-${load_shedding_policy}-${model_runtime}-100_replicas_${replicas}
 				echo $plan_file
-				CUDA_VISIBLE_DEVICES=0,1,2,3,4 bash ${dpr_dir}/evaluate_retrieval_single_doc_stream.sh $plan_file &
+				CUDA_VISIBLE_DEVICES=4 bash ${dpr_dir}/evaluate_retrieval_single_doc_stream.sh $plan_file &
 
 				#pid=$!
 			done

@@ -1,6 +1,6 @@
 set -xe
 
-for replicas in 1 2 4 6 8
+for replicas in 16 32
 do
 	for model_runtime in 0.25 #0.001 0.05 0.01 0.1 1.0 5.0 10.0
 	do

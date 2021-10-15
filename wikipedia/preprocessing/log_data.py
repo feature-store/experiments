@@ -44,19 +44,21 @@ def log_plans(run, config, plan_dir):
 
 def log_plan_data(run, config, plan_name, plan_path):
     artifact = wandb.Artifact(plan_name, type='dataset')
-    artifact.add_folder(plan_path)
+    artifact.add_dir(plan_path)
     run.log_artifact
 
 
 def log_experiment(run, config):
     # log experiment output
     artifact = wandb.Artifact("prediction_results", type='dataset')
-    files = os.listdir(config["directory"]["dpr_dir"])
-    for filename in files: 
-        if "plan-" in filename and '.json' in filename:
-            artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
-        if "plan-" in filename and '.pkl' in filename:
-            artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
+    #files = os.listdir(config["directory"]["dpr_dir"])
+    #files = os.listdir("/data/wooders/wikipedia/predictions")
+    artifact.add_dir("/data/wooders/wikipedia/predictions")
+    #for filename in files: 
+    #    if "plan-" in filename and '.json' in filename:
+    #        artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
+    #    if "plan-" in filename and '.pkl' in filename:
+    #        artifact.add_file(os.path.join(config["directory"]["dpr_dir"], filename))
 
     run.log_artifact(artifact)
 
