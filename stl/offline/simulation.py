@@ -81,8 +81,7 @@ def main(argv):
     else: 
         keys = [i+1 for i in range(FLAGS.num_keys)]
 
-    print("keys", keys)
-
+    print(FLAGS.key_prio_policy)
     source_to_window_queue = simpy.Store(env)
     windows_to_mapper_queue = {
         key: PerKeyPriorityQueue(

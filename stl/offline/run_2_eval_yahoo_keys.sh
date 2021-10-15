@@ -17,7 +17,7 @@ do
 done
 done
 
-cat $tmp_script | xargs -n 1 -P 36 bash -l -c
+cat $tmp_script | xargs -n 1 -P 144 bash -l -c
 
 
 #set -ex
