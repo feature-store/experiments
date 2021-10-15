@@ -2,7 +2,7 @@ set -xe
 
 plan_dir=/data/wooders/wiki-plans
 
-for replicas in 2
+for replicas in 6 8
 do
 for model_runtime in 0.25
 do

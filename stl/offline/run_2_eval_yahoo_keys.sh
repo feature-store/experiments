@@ -1,6 +1,7 @@
 set -ex
 
 data_dir="./yahoo_train_data"
+results_dir="/data/wooders/stl/results"
 
 tmp_script=`mktemp`
 for key_prio in "lifo" "fifo"
@@ -11,8 +12,8 @@ do
     for slide in 6 12 18 24 48 96 168 192 336 672
     do
         echo \" python evaluation.py --offline-yahoo-csv-path $data \
-            --offline-plan-path ./offline_1_slide/plan/${key_prio}_slide_${slide}_plan.json \
-            --output-path ./offline_1_slide/single_key/${key_prio}_slide_${slide}_key_${key} \" >> $tmp_script
+            --offline-plan-path ${results_dir}/plan/${key_prio}_slide_${slide}_plan.json \
+            --output-path ${results_dir}/single_key/${key_prio}_slide_${slide}_key_${key} \" >> $tmp_script
     done
 done
 done
