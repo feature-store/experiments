@@ -4,7 +4,7 @@ plan_dir=/data/wooders/wiki-plans
 
 for replicas in 2
 do
-for model_runtime in 1.0
+for model_runtime in 0.25
 do
 	for event_policy in "lifo"
 	do

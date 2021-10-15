@@ -450,7 +450,8 @@ class WikiMapper(RalfMapper):
             runtime = self.model_runtime_s * num_passages
             #print(runtime, num_passages)
 
-            yield self.env.timeout(self.model_runtime_s)
+            yield self.env.timeout(runtime)
+            #yield self.env.timeout(self.model_runtime_s)
 
 
 # configuration file
@@ -612,4 +613,4 @@ if __name__ == "__main__":
     #                    print("DONE", out_path)
     #for f in output_files:
     #    print(f)
-    #open("plans.txt", "w").write("\n".join(output_files))
+    #slide_#open("plans.txt", "w").write("\n".join(output_files))

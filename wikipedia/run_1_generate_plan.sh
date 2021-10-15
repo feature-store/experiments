@@ -1,8 +1,8 @@
 set -xe
 
-for replicas in 2 4 8 1
+for replicas in 1 2 4 
 do
-	for model_runtime in 0.25 
+	for model_runtime in 0.001 0.05 0.01 0.1 1.0 5.0 10.0
 	do
 		for event_policy in "lifo" #"fifo" 
 		do
