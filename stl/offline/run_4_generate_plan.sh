@@ -3,7 +3,7 @@ set -ex
 # TODO(simon): use a workflow engine for step tracking
 # e.g. https://dagster.io/
 
-for max_n_fits in 1000 1200 1500
+for max_n_fits in 1000 1200 1500 2000 2500
 do
     python config_gen.py \
     --csv_dir "./result/offline_1_slide/plan_eval" \

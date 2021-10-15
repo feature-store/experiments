@@ -32,6 +32,7 @@ main() {
     
     # Ray stop should also stop that redis-server
     ray stop --force
+    pkill -9 "ray"
     # Sleep to make sure ports are cleaned up
     sleep 10
     
@@ -42,20 +43,21 @@ main() {
     --oracle_csv_extraction_regex=".*oracle_key_(\d+).csv"
 }
 
-for n_trials in 1 2 3
+for n_trials in 1 # 2 3
 do
-    for mapper_replicas in 1 2 4 6
+    for mapper_replicas in 1 # 2 4 6
     do
         # for static_window in 24 48 96 144 # 12 24 36 48 96 108 120
-        for static_window in 24 48 96 144 196 256 336
-        do
-            # Do once for static window
-            OVERRIDE_STATIC_SLIDE_SIZE=$static_window \
-            OVERRIDE_MAPPER_REPLICAS=$mapper_replicas \
-            main
-        done
+        # for static_window in 24 48 96 144 196 256 336
+        # do
+            # # Do once for static window
+            # OVERRIDE_STATIC_SLIDE_SIZE=$static_window \
+            # OVERRIDE_MAPPER_REPLICAS=$mapper_replicas \
+            # main
+        # done
         
-        for max_n_fits in 1000 1200 1500 1800 2000 2500
+        # for max_n_fits in 1000 1200 1500 1800 2000 2500
+        for max_n_fits in 1000 2000
         do
             # Do once for dynamic window
             POLICY_FLAGS="--use_per_key_slide_size_plan" \

@@ -99,17 +99,17 @@ def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss
 
 
 def get_loss_per_key(key: int, csv_dir):
-    key_one = glob(f"{csv_dir}/slide_*_key_A4Benchmark-TS{key}.csv")
+    key_one = glob(f"{csv_dir}/slide_*_key_{key}.csv")
     assert len(key_one) > 0
 
-    oracle_residual = pd.read_csv(f"{csv_dir}/oracle_key_A4Benchmark-TS{key}.csv")[
+    oracle_residual = pd.read_csv(f"{csv_dir}/oracle_key_{key}.csv")[
         "pred_residual"
     ]
 
     losses = []
     for path in key_one:
         slide_size = int(
-            os.path.basename(path).split("_key_A4")[0].replace("slide_", "")
+            os.path.basename(path).split("_key_")[0].replace("slide_", "")
         )
         df = pd.read_csv(path)
         residual = df["pred_residual"]
@@ -129,7 +129,7 @@ def get_loss_per_key(key: int, csv_dir):
 
 def main(argv):
     raw_data = []
-    for key in tqdm(range(1, 101)):
+    for key in tqdm(range(1, 201)):
         for entry in get_loss_per_key(key, csv_dir=FLAGS.csv_dir):
             raw_data.append({"key": key, **entry})
 

@@ -5,14 +5,15 @@ extern crate differential_dataflow;
 extern crate timely;
 extern crate timely_experiments;
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::{collections::HashMap, fs};
+use std::fs;
+use serde_json::json;
 
 use clap::{App, Arg};
 
-use serde_json::json;
 use timely_experiments::{
     operators::{fake_source, redis_source, MostRecent, STLFit, STLInference, ToRedis, Window},
     Record,
@@ -27,15 +28,37 @@ fn run_experiment(
     global_slide_size: usize,
     per_key_slide_size: Option<HashMap<usize, usize>>,
     seasonality: usize,
+    prioritization: &str,
     num_keys: usize,
     timesteps: usize,
     send_rate_hz: f32,
     threads: usize,
+    process_index: usize,
+    num_processes: usize,
 ) {
     let source_str = source_str.to_string();
-    // TODO: don't execute timely from args.
+    let prioritization_str = prioritization.to_string();
 
-    let config = timely::Config::process(threads);
+    let config = if num_processes == 1 {
+        timely::Config::process(threads)
+    } else {
+        let mut addresses = vec![];
+        for index in 0..num_processes {
+            addresses.push(format!("localhost:{}", 2101 + index));
+        }
+
+        timely::Config {
+            communication: timely::CommunicationConfig::Cluster {
+                threads,
+                process: process_index,
+                addresses,
+                report: false,
+                log_fn: Box::new(|_| None),
+            },
+            worker: timely::WorkerConfig::default(),
+        }
+    };
+
     timely::execute(config, move |worker| {
         // TODO: look into using Timely Exchange operator to parition across worker processes.
         worker.dataflow(|scope| {
@@ -49,7 +72,11 @@ fn run_experiment(
             } else {
                 source.sliding_window(global_window_size, global_slide_size)
             };
-            let models = windows.stl_fit(seasonality);
+            let models = match prioritization_str.as_str() {
+                "fifo" => windows.stl_fit(seasonality),
+                "lifo" => windows.stl_fit_lifo(seasonality),
+                _ => panic!("Unsupported prioritization strategy."),
+            };
             models.to_redis();
 
             // models.inspect(|((k, v), t, count)| {
@@ -106,10 +133,30 @@ fn main() {
                 .default_value("4"),
         )
         .arg(
+            Arg::with_name("prioritization")
+                .long("prioritization")
+                .takes_value(true)
+                .default_value("fifo")
+                .help("STL prioritization strategy. Either 'lifo' or 'fifo'"),
+        )
+        .arg(
             Arg::with_name("threads")
                 .long("threads")
                 .takes_value(true)
+                .default_value("1")
+                .help("number of threads per process."),
+        )
+        .arg(
+            Arg::with_name("num_processes")
+                .long("num_processes")
+                .takes_value(true)
                 .default_value("1"),
+        )
+        .arg(
+            Arg::with_name("process_index")
+                .long("process_index")
+                .takes_value(true)
+                .default_value("0"),
         )
         .arg(
             Arg::with_name("num_keys")
@@ -157,11 +204,14 @@ fn main() {
         .parse()
         .unwrap();
     let seasonality = matches.value_of("seasonality").unwrap().parse().unwrap();
+    let prioritization: String = matches.value_of("prioritization").unwrap().parse().unwrap();
     let threads = matches.value_of("threads").unwrap().parse().unwrap();
+    let num_processes: usize = matches.value_of("num_processes").unwrap().parse().unwrap();
+    let process_index: usize = matches.value_of("process_index").unwrap().parse().unwrap();
     let num_keys = matches.value_of("num_keys").unwrap().parse().unwrap();
     let timesteps = matches.value_of("timesteps").unwrap().parse().unwrap();
     let send_rate = matches.value_of("send_rate").unwrap().parse().unwrap();
-    let experiment_dir = matches.value_of("experiment_dir").unwrap();
+	let experiment_dir = matches.value_of("experiment_dir").unwrap();
     let experiment_id = matches.value_of("experiment_id").unwrap();
 
     // Write the config to a file
@@ -198,15 +248,19 @@ fn main() {
         None
     };
 
+
     run_experiment(
         source,
         global_window_size,
         global_slide_size,
         per_key_slide_size,
         seasonality,
+        &prioritization,
         num_keys,
         timesteps,
         send_rate,
         threads,
+        process_index,
+        num_processes,
     )
 }
