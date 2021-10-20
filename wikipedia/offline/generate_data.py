@@ -15,11 +15,15 @@ import numpy as np
 
 from multiprocessing import Pool
 
+import wandb
+
 # from concurrent.futures import ProcessPoolExecutor
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
 from generate_diffs import generate_sentence_level_diffs
 from embedding import generate_embeddings
+
+from log_data import log_files, log_pageview, log_simulation, log_questions
 
 
 def query_recentchanges(start_time, end_time, revision_file):
@@ -125,29 +129,9 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
     # map title -> id
     title_to_id = edits_df.set_index("title")["pageid"].to_dict()
     open("title_to_id.json", "w").write(json.dumps(title_to_id))
-    
-    # calculate page weights
-    total_views = pageview_df.iloc[:, 2:].sum(axis=1).sum()
-    weights = pageview_df.iloc[:, 2:].sum(axis=1) / total_views 
-    pageview_df['weights'] = weights
     pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
-    pageview_df.to_csv(pageview_file)
-
-    # page weights per timestamp
-    ts_to_weights = {}
-    dates = pageview_df.columns[2:-2]
-    for date in dates: 
-        print(date)
-        dt = datetime.strptime(date[:-2], '%Y%m%d')
-        ts = dt.timestamp() * 1000000000
-        ts_min = assign_timestamps_min(ts)
-        view_counts = pageview_df[date].tolist()
-        id_to_count  = pageview_df.set_index("doc_id")[date].to_dict()
-        ts_to_weights[ts_min] = id_to_count
-    open(timestamp_weights_file, "w").write(json.dumps(ts_to_weights))
-    print("Generated ts weights file", timestamp_weights_file)
+    
     return pageview_df
-
 
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
@@ -420,6 +404,8 @@ def generate_simulation_data(
                     row["old_revid"]
                 ), f"Invalid id {filename}, id {data['orig_id']} row {row['revid']}"
 
+                # get length of passage
+
                 if key not in init_data:
                     diffs = data["diffs"][0]
                     init_data[key] = {
@@ -589,7 +575,7 @@ def check_dataset(
 
 if __name__ == "__main__":
 
-    print("starting script")
+    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
 
     # configuration file
     config = configparser.ConfigParser()
@@ -662,6 +648,7 @@ if __name__ == "__main__":
         print("Generated titles file", titles_file)
         edits_df = get_edits(edits_file, changes_file, titles_file)
         print("Generated edits file", edits_file)
+        log_files(run, config)
 
     # query document versions for list of titles
     if args.run_query_doc_versions:
@@ -681,10 +668,12 @@ if __name__ == "__main__":
     if args.run_get_questions:
         questions_df = get_questions(raw_questions_file, questions_file)
         print("Generated questions file", raw_questions_file, questions_file)
+        log_questions(run, config)
 
     # generate pageviews / compute page weights
     if args.run_get_pageviews:
         get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
+        log_pageview(run, config)
 
     # generate diffs between document versions
     if args.run_generate_diffs:
@@ -704,6 +693,7 @@ if __name__ == "__main__":
             stream_edits_file,
             stream_questions_file,
         )
+        log_simulation(run, config)
 
     # run tests to validate simulation data
     if args.run_check_dataset:
