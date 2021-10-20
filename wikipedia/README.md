@@ -1,7 +1,14 @@
 # Wikipedia Experiment Pipeline
 
-### Configuration
-Update `config.yml` 
+The Wikipedia pipeline uses data collected from the Wikipedia RecentChanges and PageView API to simulate maintaining document embeddings as documents are edited and queried by a downstream retrival task. 
+
+1. *Offline Simulation Pipeline* - The offline simulation pipeline in the `offline/` folder usegenerate plans under different simulation settings and evaluates overall prediction quality. 
+2. *Online Pipeline* - The online pipeline streams simulation data into ralf, which updates an in-memory table of embeddings and responds to client queries. 
+
+## Offline Simulation Pipeline
+
+### Download data
+Download the data with `./download_data.sh` (warning: 100s of GBs) and update `config.yml` to match the paths.
 
 ### Generating simulation data
 Run parts of the pipeline using flags: 
@@ -23,10 +30,7 @@ To update simulation data, make sure you have the embeddings and diffs already d
 python generate_data.py --run_generate_simulation_data --run_get_questions --run_check_dataset
 ```
 
-
-## Offline Simulation Pipeline
-Download the data with `./download_data.sh` (warning: 100s of GBs) and update `config.yml`.
-
+### Running simulations 
 Run the simulation in stages to go from raw Wikipedia API data to simulation results: 
 
 ```
