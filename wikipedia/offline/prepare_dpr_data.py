@@ -31,6 +31,7 @@ from dpr.utils.model_utils import (
 )
 from dpr.utils.data_utils import Tensorizer
 
+from preprocessing.log_data import log_plan_data
 
 """
 
@@ -47,14 +48,21 @@ Upload results:
 """
 # simulation data
 
+import wandb
+run = wandb.init(project='wiki-workload', job_type="dataset-creation")
+simulation_dir = run.use_artifact('ucb-ralf/wiki-workload /simulation:v2', type='dataset').download()
+question_dir = run.use_artifact('ucb-ralf/wiki-workload /questions:v2', type='dataset').download()
+
+init_data_file = f"{simulation_dir}/init_data.json"
+stream_edits_file = f"{simulation_dir}/edit_stream.json"
+stream_questions_file = f"{simulation_dir}/question_stream.json"
+
 config = configparser.ConfigParser()
 config.read("config.yml")
-plan_dir = config["simulation"]["plan_dir"]
-init_data_file = config["simulation"]["init_data_file"]
-stream_edits_file = config["simulation"]["stream_edits_file"]
-stream_questions_file = config["simulation"]["stream_questions_file"]
-
-data_dir = config['files']['data_dir']
+#plan_dir = config["simulation"]["plan_dir"]
+#init_data_file = config["simulation"]["init_data_file"]
+#stream_edits_file = config["simulation"]["stream_edits_file"]
+#stream_questions_file = config["simulation"]["stream_questions_file"]
 rev_dir = config['directory']['diff_dir'] 
 embedding_dir = config['directory']['embedding_dir'] 
 exp_dir = config['directory']['exp_dir'] 
@@ -64,87 +72,13 @@ model_file = config['files']['model_file']
 parser = argparse.ArgumentParser(description="Specify experiment config")
 parser.add_argument("--offline-plan-path", type=str)
 parser.add_argument("--embed", default=False, action="store_true")
+parser.add_argument("--wandb", default=False, action="store_true")
+parser.add_argument("--workers", type=int)
 args = parser.parse_args()
 
-
-class Retriever:
-    def __init__(self):
-
-        # parser = argparse.ArgumentParser(description="")
-        add_encoder_params(parser)
-        add_tokenizer_params(parser)
-        add_cuda_params(parser)
-        args = parser.parse_args()
-
-        setup_args_gpu(args)
-
-        saved_state = load_states_from_checkpoint(model_file)
-        set_encoder_params_from_state(saved_state.encoder_params, args)
-
-        self.tensorizer, self.encoder, _ = init_biencoder_components(
-            args.encoder_model_type, args, inference_only=True
-        )
-
-        self.encoder = self.encoder.ctx_model
-
-        self.encoder, _ = setup_for_distributed_mode(
-            self.encoder,
-            None,
-            args.device,
-            args.n_gpu,
-            args.local_rank,
-            args.fp16,
-            args.fp16_opt_level,
-        )
-        self.encoder.eval()
-
-        model_to_load = get_model_obj(self.encoder)
-
-        prefix_len = len("ctx_model.")
-        ctx_state = {
-            key[prefix_len:]: value
-            for (key, value) in saved_state.model_dict.items()
-            if key.startswith("ctx_model.")
-        }
-        model_to_load.load_state_dict(ctx_state)
-        self.device = args.device
-
-    def predict(self, text):
-
-        st = time.time()
-        batch_token_tensors = [self.tensorizer.text_to_tensor(text)]
-
-        ctx_ids_batch = move_to_device(
-            torch.stack(batch_token_tensors, dim=0), self.device
-        )
-        ctx_seg_batch = move_to_device(torch.zeros_like(ctx_ids_batch), self.device)
-        ctx_attn_mask = move_to_device(
-            self.tensorizer.get_attn_mask(ctx_ids_batch), self.device
-        )
-        with torch.no_grad():
-            _, embedding, _ = self.encoder(ctx_ids_batch, ctx_seg_batch, ctx_attn_mask)
-        embedding = embedding.cpu().numpy()
-        return embedding
-
-
-def assign_timestamps_min(ts):
-    # take in unix timestamp - covert to integer
-    start_ts = 1628131044000000000  # don't change
-    delta = ts - start_ts
-    if delta < 0:
-        return None
-
-    return int(delta / (60 * 1000000000))
-
-
-def embed_passages(sents, retriever_model, num_sent_in_pass=10):
-    passages = []
-    embeddings = []
-    for i in range(0, len(sents), num_sent_in_pass):
-        passages.append(" ".join(sents[i : i + num_sent_in_pass]))
-        embeddings.append(retriever_model.predict(passages[-1]))
-    return passages, embeddings
-
+exp_id = os.path.basename(args.offline_plan_path).replace(".json", "")
+run.config.update(vars(args))
+run.config.update({"plan": exp_id})
 
 def sents_to_passages(sents, num_sent_in_pass=10):
     passages = []
@@ -164,13 +98,10 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
     keys = ["51150040"]
     filter_keys = False
 
-    # retriever_model = Retriever()
-    # print("Created retriever")
 
     # compute initial passage embeddings for each document
     init_data = json.load(open(init_data_file))
     init_state = {}
-    staleness = []
     for key in tqdm(init_data.keys()):
 
         if filter_keys and key not in keys:
@@ -255,31 +186,36 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
     print("EMBED", embed_versions.keys())
     print("Num refits", count, len(missing))
 
-    # returns latest version of document embeddings for timestep/key
-    def get_latest_embedding(timestep, doc_id):
+    embed_filename = "embed_versions.pkl"
+    pickle.dump(embed_versions, open(embed_filename, "wb"))
+    return embed_filename
 
-        latest = 0
-        for version in embed_versions.keys():
-            version = float(version)
-            if (
-                float(timestep) >= version
-                and version > latest
-                and doc_id in embed_versions[str(version)]
-            ):
-                latest = version
-        #print(doc_id, "latest", timestep, latest, timestep - latest)
-        assert (
-            doc_id in embed_versions[str(latest)]
-        ), f"Missing doc id {doc_id} {latest} {doc_id in init_data}"
-        doc_version = embed_versions[str(latest)][doc_id]
-        assert latest <= timestep
-        return (
-            doc_version["passages"],
-            doc_version["embeddings"],
-            doc_version["rev"],
-            latest,
-        )
+# returns latest version of document embeddings for timestep/key
+def get_latest_embedding(timestep, doc_id, embed_versions):
 
+    latest = 0
+    for version in embed_versions.keys():
+        version = float(version)
+        if (
+            float(timestep) >= version
+            and version > latest
+            and doc_id in embed_versions[str(version)]
+        ):
+            latest = version
+    #print(doc_id, "latest", timestep, latest, timestep - latest)
+    assert (
+        doc_id in embed_versions[str(latest)]
+    ), f"Missing doc id {doc_id} {latest} {doc_id in init_data}"
+    doc_version = embed_versions[str(latest)][doc_id]
+    assert latest <= timestep
+    return (
+        doc_version["passages"],
+        doc_version["embeddings"],
+        doc_version["rev"],
+        latest,
+    )
+
+def generate_question_data_all(exp_id, embed_filename):
     # create experiment directory
     directory = os.path.join(exp_dir, exp_id)
     if os.path.isdir(directory):
@@ -290,16 +226,35 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
 
     # get simulation data questions
     questions = json.load(open(stream_questions_file))
+
+    for ts in range(len(questions)):
+        questions[ts]["ts"] = ts
+
     print("processing questions", len(questions))
     print("directory", directory)
 
-    # Get embedding version for each query, write outputs
-    for ts in tqdm(range(len(questions))):
+    chunk_size = 1000
+    chunks = [(questions[i:i+chunk_size], embed_filename, directory) for i in range(0, len(questions), chunk_size)]
+    p = Pool(args.workers) 
+    staleness_all = p.starmap(generate_question_data, chunks)
+    p.close()
+    staleness_all = [item for sublist in staleness_all for item in sublist]
+    staleness = np.array(staleness_all).mean()
+    print("all staleness", staleness)
+    wandb.log({"staleness": staleness})
+    return directory
+
+
+def generate_question_data(questions, embed_filename, directory):
+    embed_versions = pickle.load(open(embed_filename, "rb"))
+    init_data = json.load(open(init_data_file))
+
+    staleness = []
+    for ts_questions in questions:
+        ts = ts_questions["ts"]
         timestep = ts / 100  # TODO: Watch out!! can change and mess up experiment
-        # print(ts, timestep)
-
-        for doc_id in questions[ts].keys():
-
+        for doc_id in ts_questions.keys():
+            if doc_id == "ts": continue
             # not considered in edits
             if doc_id not in init_data:
                 print("missing", doc_id)
@@ -308,11 +263,11 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
 
             # get current embedding and write
             passage_texts, passage_embeddings, version, latest = get_latest_embedding(
-                timestep, doc_id
+                timestep, doc_id, embed_versions
             )
  
             # loop through questions
-            doc_questions = questions[ts][doc_id]
+            doc_questions = ts_questions[doc_id]
             queries = []
             for q in doc_questions:
                 question = q["question"]
@@ -326,7 +281,6 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
                 queries.append([question, [answer], doc_id])
 
                 # append per query
-                print("staleness", timestep - latest)
                 staleness.append(timestep - latest)
 
             # dump CTX/question script
@@ -352,27 +306,20 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
 
             assert len(passage_ctx) == len(passage_texts)
             assert len(passage_embeddings) == len(passage_texts)
-
-    print("done processing queries!", len(questions))
     print("staleness", np.array(staleness).mean())
-    return directory
-
+    return staleness
 
 def main():
+   
 
-    plan_file = (
-        args.offline_plan_path
-    )  # "wiki-plans/plan-fifo-always_process-1-0.001-60.json"
-    exp_id = os.path.basename(plan_file).replace(".json", "")
-    
-    output_dir = offline_eval(plan_file, exp_id, compute_embeddings=args.embed)
-    log_wandb = False
-    if log_wandb:
-        import wandb
+    embed_filename = offline_eval(args.offline_plan_path, exp_id, compute_embeddings=args.embed)
 
-        run = wandb.init(job_type="create_simulation_output")
-        artifact = wandb.Artifact(exp_id, type="dataset")
-        artifact.add_folder(output_dir)
+    #embed_filename = "embed_versions.pkl"
+    generate_question_data_all(exp_id, embed_filename)
+    #if args.wandb:
+    #    import wandb
+    #    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
+    #    log_plan_data(run, config, exp_id, output_dir)
 
 
 if __name__ == "__main__":
