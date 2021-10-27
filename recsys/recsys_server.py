@@ -2,12 +2,13 @@ import numpy as np
 import pandas as pd
 import ray
 from ralf.operator import Operator, DEFAULT_STATE_CACHE_SIZE
-from ralf.operators import (
-    Source,
-)
+from ralf.operators.source import Source
 from ralf.state import Record, Schema
 from ralf.core import Ralf
 from ralf.table import Table
+import argparse
+import os
+import time
 
 NUM_MOVIES = 193609 # hard-coded for small dataset but could loop through source to check
 
@@ -28,7 +29,7 @@ class RatingSource(Source):
             "key",
             {
                 # generate key?
-                "key": int,
+                "key": str,
                 "user_id": int,
                 "movie_id": int,
                 "rating": int,
@@ -43,23 +44,18 @@ class RatingSource(Source):
             self.data.append(row.to_dict())
         self.send_rate = send_rate
         self.ts = 0
-        self.matrix = dict()
 
     def next(self):
         try:
             if self.ts < len(self.data):
-
                 d = self.data[self.ts]
                 t = time.time()
-                
-                ratings[movie_id - 1] = rating
-                self.matrix[user_id] = ratings
 
                 record = Record(
-                    key=d["userId"],
-                    user_id=d["userId"],
-                    movie_id=d["movieId"],
-                    rating=d["rating"],
+                    key=str(d["userId"]),
+                    user_id=int(d["userId"]),
+                    movie_id=int(d["movieId"]),
+                    rating=int(d["rating"]),
                 )
                 self.ts += 1
                 time.sleep(1 / self.send_rate)
@@ -71,7 +67,7 @@ class RatingSource(Source):
             raise StopIteration
 
 @ray.remote
-class Users(Operator):
+class UserOperator(Operator):
     def __init__(
         self,
         cache_size=DEFAULT_STATE_CACHE_SIZE,
@@ -85,7 +81,7 @@ class Users(Operator):
         schema = Schema(
             "key",
             {
-                "key": int,
+                "key": str,
                 "user_id": int,
                 "features": np.array,
             },
@@ -101,6 +97,7 @@ class Users(Operator):
     def on_record(self, record: Record) -> Record:
 
         try:
+            key = record.key
             user_id = record.user_id
             movie_id = record.movie_id
             rating = record.rating
@@ -109,25 +106,27 @@ class Users(Operator):
                 user_vector = self.user_matrix[user_id]
                 ratings = self.rating_matrix[user_id]
             else:
-                user_vector = np.random.rand(self.num_features)
-                ratings = np.random.rand(NUM_MOVIES)
-
+                user_vector = np.random.randint(100, size=self.num_features)
+                ratings = np.random.randint(1, size=NUM_MOVIES)
             if movie_id in self.movie_matrix:
                 movie_vector = self.movie_matrix[movie_id]
             else:
-                movie_vector = np.random.rand(self.num_features)
-
+                movie_vector = np.random.randint(100, size=self.num_features)
+            
+            print(type(movie_id))
             ratings[movie_id-1] = rating
             self.rating_matrix[user_id] = ratings
             
             # recompute features
+            print(user_vector, movie_vector)
             sub_result = rating - np.dot(np.transpose(user_vector), movie_vector)
-            new_user_vector = alpha * sub_result * movie_vector + self.l * user_vector
-
-            self.matrix[user_id] = new_user_vector
+            print(sub_result)
+            new_user_vector = self.alpha * sub_result * movie_vector + self.l * user_vector
+            print(new_user_vector)
+            self.user_matrix[user_id] = new_user_vector
             record = Record(
-                    key=d["userId"],
-                    user_id=d["userId"],
+                    key=key,
+                    user_id=user_id,
                     features=new_user_vector,
             )
             return [record]
@@ -167,7 +166,7 @@ def from_file(send_rate: int, f: str):
 
 def create_doc_pipeline(args):
     ralf_conn = Ralf(
-        metric_dir=os.path.join(args.exp_dir, args.exp), log_wandb=True, exp_id=args.exp
+        metric_dir=os.path.join(args.exp_dir, args.exp), log_wandb=False, exp_id=args.exp
     )
 
     # create pipeline
@@ -177,3 +176,56 @@ def create_doc_pipeline(args):
     ralf_conn.deploy(source, "source")
 
     return ralf_conn
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="Specify experiment config")
+    parser.add_argument("--send-rate", type=int, default=100)
+    parser.add_argument("--timesteps", type=int, default=10)
+
+    # Experiment related
+    # TODO: add wikipedia dataset
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="/Users/amitnarang/Downloads/ml-latest-small",
+    )
+    parser.add_argument(
+        "--exp-dir",
+        type=str,
+        default="/Users/amitnarang/ralf-experiments",
+    )
+
+    parser.add_argument("--file", type=str, default=None)
+    parser.add_argument("--exp", type=str)  # experiment id
+    args = parser.parse_args()
+    print(args)
+    # create experiment directory
+    ex_id = args.exp
+    ex_dir = os.path.join(args.exp_dir, ex_id)
+    os.mkdir(ex_dir)
+
+    # create stl pipeline
+    ralf_conn = create_doc_pipeline(args)
+    ralf_conn.run()
+
+    # snapshot stats
+    run_duration = 120
+    snapshot_interval = 10
+    start = time.time()
+    while time.time() - start < run_duration:
+        snapshot_time = ralf_conn.snapshot()
+        remaining_time = snapshot_interval - snapshot_time
+        if remaining_time < 0:
+            print(
+                f"snapshot interval is {snapshot_interval} but it took {snapshot_time} to perform it!"
+            )
+            time.sleep(0)
+        else:
+            print("writing snapshot", snapshot_time)
+            time.sleep(remaining_time)
+
+
+if __name__ == "__main__":
+    main()
