@@ -35,4 +35,9 @@ if __name__ == "__main__":
     #res = client.point_query(key=user_id, table_name="user_vectors")
     #print(res)
     res = client.bulk_query(table_name="user_vectors")
+    print("User Vectors")
     print([r for r in res])
+    '''
+    res = client.bulk_query(table_name="movie_vectors")
+    print([r for r in res])
+    '''

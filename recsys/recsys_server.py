@@ -9,6 +9,7 @@ from ralf.table import Table
 import argparse
 import os
 import time
+import csv
 
 NUM_MOVIES = 193609 # hard-coded for small dataset but could loop through source to check
 
@@ -83,7 +84,9 @@ class UserOperator(Operator):
             {
                 "key": str,
                 "user_id": int,
-                "features": np.array,
+                "movie_id": int,
+                "user_vector": np.array,
+                "movie_vector": np.array,
             },
         )
         super().__init__(schema, cache_size, lazy, num_worker_threads)
@@ -95,7 +98,6 @@ class UserOperator(Operator):
         self.l = l
 
     def on_record(self, record: Record) -> Record:
-
         try:
             key = record.key
             user_id = record.user_id
@@ -112,32 +114,36 @@ class UserOperator(Operator):
                 movie_vector = self.movie_matrix[movie_id]
             else:
                 movie_vector = np.random.randint(100, size=self.num_features)
-            
-            print(type(movie_id))
+                '''
+                with open("movie_vectors.csv", "a") as f:
+                    csvwriter = csv.writer(f) 
+                    csvwriter.writerow([str(movie_id), str(movie_vector)])
+                '''
             ratings[movie_id-1] = rating
             self.rating_matrix[user_id] = ratings
-            
+            self.movie_matrix[movie_id] = movie_vector
             # recompute features
-            print(user_vector, movie_vector)
+            print(self.movie_matrix)
             sub_result = rating - np.dot(np.transpose(user_vector), movie_vector)
-            print(sub_result)
             new_user_vector = self.alpha * sub_result * movie_vector + self.l * user_vector
-            print(new_user_vector)
             self.user_matrix[user_id] = new_user_vector
             record = Record(
                     key=key,
                     user_id=user_id,
-                    features=new_user_vector,
+                    movie_id=movie_id,
+                    user_vector=new_user_vector,
+                    movie_vector=movie_vector,
             )
+            print("Sending record from user", record.movie_id)
             return [record]
 
         except Exception as e:
             print(e)
 
-'''
+
 # Currently unnecessary?
 @ray.remote
-class Movies(Operator):
+class MovieOperator(Operator):
     def __init__(
         self,
         cache_size=DEFAULT_STATE_CACHE_SIZE,
@@ -148,18 +154,22 @@ class Movies(Operator):
         schema = Schema(
             "key",
             {
-                "key": int,
-                "user_id": int,
+                "key": str,
                 "movie_id": int,
-                "rating": int,
+                "movie_vector": np.array,
             },
         )
         super().__init__(schema, cache_size, lazy, num_worker_threads)
 
-    def on_record(self, record: Record) -> None:
+    def on_record(self, record: Record) -> Record:
         # Currently, not updating the movies table (only the user)
-        return None
-'''
+        print("Hit record", record)
+        new_record = Record(
+            key=str(record.movie_id),
+            movie_id=record.movie_id,
+            movie_vector=record.movie_vector,
+        )
+        return [new_record]
 
 def from_file(send_rate: int, f: str):
     return Table([], RatingSource, send_rate, f)
@@ -172,6 +182,8 @@ def create_doc_pipeline(args):
     # create pipeline
     source = from_file(args.send_rate, os.path.join(args.data_dir, args.file))
     user_vectors = source.map(UserOperator, args, num_replicas=8).as_queryable("user_vectors")
+    #movies = source.join(user_vectors, MovieOperator).as_queryable("movie_vectors")
+    #movie_vectors = user_vectors.map(MovieOperator).as_queryable("movie_vectors")
     # deploy
     ralf_conn.deploy(source, "source")
 
@@ -200,7 +212,6 @@ def main():
     parser.add_argument("--file", type=str, default=None)
     parser.add_argument("--exp", type=str)  # experiment id
     args = parser.parse_args()
-    print(args)
     # create experiment directory
     ex_id = args.exp
     ex_dir = os.path.join(args.exp_dir, ex_id)
@@ -215,16 +226,7 @@ def main():
     snapshot_interval = 10
     start = time.time()
     while time.time() - start < run_duration:
-        snapshot_time = ralf_conn.snapshot()
-        remaining_time = snapshot_interval - snapshot_time
-        if remaining_time < 0:
-            print(
-                f"snapshot interval is {snapshot_interval} but it took {snapshot_time} to perform it!"
-            )
-            time.sleep(0)
-        else:
-            print("writing snapshot", snapshot_time)
-            time.sleep(remaining_time)
+        pass
 
 
 if __name__ == "__main__":
