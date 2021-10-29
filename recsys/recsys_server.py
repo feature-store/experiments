@@ -181,7 +181,7 @@ def create_doc_pipeline(args):
 
     # create pipeline
     source = from_file(args.send_rate, os.path.join(args.data_dir, args.file))
-    user_vectors = source.map(UserOperator, args, num_replicas=8).as_queryable("user_vectors")
+    user_vectors = source.map(UserOperator, args, num_replicas=1).as_queryable("user_vectors")
     #movies = source.join(user_vectors, MovieOperator).as_queryable("movie_vectors")
     #movie_vectors = user_vectors.map(MovieOperator).as_queryable("movie_vectors")
     # deploy
@@ -226,7 +226,16 @@ def main():
     snapshot_interval = 10
     start = time.time()
     while time.time() - start < run_duration:
-        pass
+        snapshot_time = ralf_conn.snapshot()
+        remaining_time = snapshot_interval - snapshot_time
+        if remaining_time < 0:
+            print(
+                f"snapshot interval is {snapshot_interval} but it took {snapshot_time} to perform it!"
+            )
+            time.sleep(0)
+        else:
+            print("writing snapshot", snapshot_time)
+            time.sleep(remaining_time)
 
 
 if __name__ == "__main__":
