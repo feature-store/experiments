@@ -1,7 +1,8 @@
 set -ex
 
 #data_dir="/home/ubuntu/ydata-labeled-time-series-anomalies-v1_0/A4Benchmark/"
-data_dir="./yahoo_eval_data"
+#data_dir="./yahoo_eval_data"
+data_dir="/home/eecs/wooders/experiments/stl/notebooks/artifacts/yahoo_eval_data:v0"
 output_path="./oracle"
 
 tmp_script=`mktemp`
