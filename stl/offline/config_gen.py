@@ -159,6 +159,8 @@ def main(argv):
     print(f"loss per key (sample of 10 out of {len(df)})")
     print(df.groupby("key")["loss"].describe().sample(10))
 
+    df.to_csv("lp_input.csv")
+
     print("generating lp config for min_loss")
     lp_result, _loss = run_lp(df[["key", "n_fits", "loss"]], objective="min_loss")
 

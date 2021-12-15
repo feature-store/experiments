@@ -1,9 +1,12 @@
 set -ex
-PARAM_DIR="offline_1_slide"
-PLAN_DIR="offline_1_slide"
-OUTPUT_CSV_PATH="offline_1_slide/lp_plan_eval"
-TRAIN_PATH="./yahoo_train_data"
-EVAL_PATH="./yahoo_eval_data"
+#PARAM_DIR="offline_1_slide"
+PARAM_DIR="/data/wooders/stl/results"
+PLAN_DIR="/data/wooders/stl/results"
+#OUTPUT_CSV_PATH="offline_1_slide/lp_plan_eval"
+#TRAIN_PATH="./yahoo_train_data/data/wooders/stl/results"
+#EVAL_PATH="./yahoo_eval_data"
+EVAL_PATH="/home/eecs/wooders/experiments/stl/notebooks/artifacts/yahoo_eval_data:v0"
+TRAIN_PATH="/home/eecs/wooders/experiments/stl/notebooks/artifacts/yahoo_train_data:v0"
 
 
 for replicas in 8

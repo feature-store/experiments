@@ -10,6 +10,6 @@ set -ex
 MAX_FITS=500
 python config_gen.py \
     --csv_dir "/data/wooders/stl/results/single_key" \
-    --output_path "/data/wooders/stl/results/max_fits_${MAX_FITS}.json" \
+    --output_path "/data/wooders/stl/results/test_${MAX_FITS}.json" \
     --max_n_fits ${MAX_FITS}
 
