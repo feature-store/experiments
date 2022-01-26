@@ -26,7 +26,7 @@ load_shed_policies = {
 
 flags.DEFINE_enum(
     "key_prio_policy",
-    "fifo",
+    "lifo",
     list(prio_policies.keys()),
     "The prioritization policy for a given key.",
 )
@@ -63,7 +63,7 @@ flags.DEFINE_string(
     None,
     "path to generated per key's window slide size config.",
 )
-flags.DEFINE_integer("num_mapper_replicas", 10, "number of replicas for mapper")
+flags.DEFINE_integer("num_mapper_replicas", 1, "number of replicas for mapper")
 
 
 def _get_config() -> Dict:

@@ -6,7 +6,6 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from absl import app, flags
-from ortools.linear_solver import pywraplp
 from sktime.performance_metrics.forecasting import mean_squared_scaled_error
 
 FLAGS = flags.FLAGS
@@ -23,8 +22,30 @@ flags.DEFINE_string(
     required=True,
 )
 
+# TODO(simon): add flags for lp solver constraint
+flags.DEFINE_integer(
+    "max_n_fits",
+    default=None,
+    help="Max fits for LP",
+    required=False,
+)
 
-def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss"):
+flags.DEFINE_integer(
+    "max_loss",
+    default=None,
+    help="Max loss for LP",
+    required=False,
+)
+
+flags.DEFINE_string(
+    "objective",
+    default="min_loss",
+    help="LP optimization goal",
+    required=False,
+)
+
+def run_lp(df: pd.DataFrame, objective="min_loss"):
+    from ortools.linear_solver import pywraplp
     """Run through mixed integer program to generate the best plan.
 
     Input:
@@ -35,6 +56,8 @@ def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss
     Output:
         plan(Dict[str, int]): a dictionary mapping key -> optimal n_fits such that loss is minimal.
     """
+    max_n_fits = FLAGS.max_n_fits
+    max_loss = FLAGS.max_loss
     assert all(df.columns == ["key", "n_fits", "loss"])
     assert objective in {"min_loss", "min_fits"}
 
@@ -95,18 +118,18 @@ def run_lp(df: pd.DataFrame, max_n_fits=None, max_loss=None, objective="min_loss
     return plan_output, optimal_loss
 
 
-def get_loss_per_key(key: int, csv_dir)
-    key_one = glob(f"{csv_dir}/slide_*_key_A4Benchmark-TS{key}.csv")
+def get_loss_per_key(key: int, csv_dir):
+    key_one = glob(f"{csv_dir}/fifo_slide_*_key_{key}.csv")
     assert len(key_one) > 0
 
-    oracle_residual = pd.read_csv(f"{csv_dir}/oracle_key_A4Benchmark-TS{key}.csv")[
+    oracle_residual = pd.read_csv(f"./oracle/{key}.csv")[
         "pred_residual"
     ]
 
     losses = []
     for path in key_one:
         slide_size = int(
-            os.path.basename(path).split("_key_A4")[0].replace("slide_", "")
+            os.path.basename(path).split("_key_")[0].replace("fifo_slide_", "")
         )
         df = pd.read_csv(path)
         residual = df["pred_residual"]
@@ -135,6 +158,8 @@ def main(argv):
     print(df.groupby("n_fits")["loss"].describe())
     print(f"loss per key (sample of 10 out of {len(df)})")
     print(df.groupby("key")["loss"].describe().sample(10))
+
+    df.to_csv("lp_input.csv")
 
     print("generating lp config for min_loss")
     lp_result, _loss = run_lp(df[["key", "n_fits", "loss"]], objective="min_loss")

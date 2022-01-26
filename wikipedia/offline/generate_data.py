@@ -129,9 +129,29 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
     # map title -> id
     title_to_id = edits_df.set_index("title")["pageid"].to_dict()
     open("title_to_id.json", "w").write(json.dumps(title_to_id))
-    pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
     
+    # calculate page weights
+    total_views = pageview_df.iloc[:, 2:].sum(axis=1).sum()
+    weights = pageview_df.iloc[:, 2:].sum(axis=1) / total_views 
+    pageview_df['weights'] = weights
+    pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
+    pageview_df.to_csv(pageview_file)
+
+    # page weights per timestamp
+    ts_to_weights = {}
+    dates = pageview_df.columns[2:-2]
+    for date in dates: 
+        print(date)
+        dt = datetime.strptime(date[:-2], '%Y%m%d')
+        ts = dt.timestamp() * 1000000000
+        ts_min = assign_timestamps_min(ts)
+        view_counts = pageview_df[date].tolist()
+        id_to_count  = pageview_df.set_index("doc_id")[date].to_dict()
+        ts_to_weights[ts_min] = id_to_count
+    open(timestamp_weights_file, "w").write(json.dumps(ts_to_weights))
+    print("Generated ts weights file", timestamp_weights_file)
     return pageview_df
+
 
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
