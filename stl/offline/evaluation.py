@@ -1,4 +1,5 @@
 import argparse
+import time
 from multiprocessing import Pool
 import json
 import os
@@ -13,7 +14,9 @@ from statsmodels.tsa.seasonal import STL
 def train(data, window_size, seasonality):
     window = data[-window_size:]
     values = [r["value"] for r in window]
+    st = time.time()
     stl_result = STL(values, period=seasonality, robust=True).fit()
+    print(time.time() - st)
     timestamp = data[-1]["timestamp"]
     return {
         "timestamp": timestamp,
@@ -42,15 +45,17 @@ SEASONALITY = 24 * 7
 
 def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
 
+    print(output_path)
+
     # get plan DF for key
-    param_path = "/data/wooders/eurosys-results/10-05/stl-offline/result/offline_1_slide/min_loss_plan.json"
-    policy_params = json.load(open(param_path))
     plan_df = pd.read_json(plan_json_path)
-    plan_df_key = plan_df[plan_df["key"] == int(key)]
+    if key is not None:
+        plan_df_key = plan_df[plan_df["key"] == int(key)]
+    else: 
+        plan_df_key = plan_df
     plan_df_key.index = pd.RangeIndex(start=0, stop=len(plan_df_key.index))
 
     # get original data
-    print(yahoo_csv_path)
     df = pd.read_csv(yahoo_csv_path)
     df["timestamp"] = list(range(len(df)))
 
@@ -88,6 +93,7 @@ def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
 
     # Run prediction!
     predicted = []
+    print("running prediction")
     for _, row in df.iterrows():
         model_version = row["model_version"]
         if np.isnan(model_version):
@@ -112,8 +118,8 @@ def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
     add_df = pd.DataFrame(predicted)
     for new_col in add_df.columns:
         df[new_col] = add_df[new_col]
-    df.to_csv(output_file)
-    return 
+    print("writing", output_path)
+    df.to_csv(output_path, index=None)
 
 def offline_eval_all(yahoo_path, plan_json_path, output_path, param_path): 
 
@@ -129,7 +135,6 @@ def offline_eval_all(yahoo_path, plan_json_path, output_path, param_path):
     p.starmap(offline_eval, inputs)
     p.close()
     return 
-
 
 
 def offline_oracle(yahoo_csv_path, output_path):
@@ -156,9 +161,8 @@ def run_exp(csv_path, plan_path, output_path, run_policy=False, run_oracle=False
 
         # Headers
         # processing_time  window_start_seq_id  window_end_seq_id  key
-        plan_df = pd.read_json(plan_path)
-        offline_eval(csv_path, plan_df, output_path)
-        df.to_csv(output_path, index=None)
+        #plan_df = pd.read_json(plan_path)
+        offline_eval(csv_path, plan_path, None, output_path)
 
 
 def _ensure_dir(path):
