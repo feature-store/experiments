@@ -77,8 +77,7 @@ def offline_eval(yahoo_csv_path, plan_json_path, key, output_path):
         #print("fit time", time.time() - st)
         offline_stl[row.processing_time] = trained
 
-    print(offline_stl.keys())
-
+    print(offline_stl)
 
     # Assign the trained model with every events in the source file.
     def find_freshest_model_version(event_time, model_versions):
@@ -136,7 +135,6 @@ def offline_eval_all(yahoo_path, plan_json_path, output_path, param_path):
     p.starmap(offline_eval, inputs)
     p.close()
     return 
-
 
 
 def offline_oracle(yahoo_csv_path, output_path):

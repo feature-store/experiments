@@ -73,6 +73,7 @@ parser = argparse.ArgumentParser(description="Specify experiment config")
 parser.add_argument("--offline-plan-path", type=str)
 parser.add_argument("--embed", default=False, action="store_true")
 parser.add_argument("--wandb", default=False, action="store_true")
+parser.add_argument("--workers", type=int)
 args = parser.parse_args()
 
 exp_id = os.path.basename(args.offline_plan_path).replace(".json", "")
@@ -234,7 +235,7 @@ def generate_question_data_all(exp_id, embed_filename):
 
     chunk_size = 1000
     chunks = [(questions[i:i+chunk_size], embed_filename, directory) for i in range(0, len(questions), chunk_size)]
-    p = Pool(64) 
+    p = Pool(args.workers) 
     staleness_all = p.starmap(generate_question_data, chunks)
     p.close()
     staleness_all = [item for sublist in staleness_all for item in sublist]

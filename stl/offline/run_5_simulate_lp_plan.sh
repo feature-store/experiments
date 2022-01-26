@@ -37,3 +37,4 @@ do
 	#python evaluate_loss.py --offline-yahoo-csv-path $SOURCE_PATH --predicted-csv-path $OUTPUT_CSV_PATH --output-path 
 done	
 done
+

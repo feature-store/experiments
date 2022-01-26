@@ -79,9 +79,8 @@ def main(argv):
         policy_params = json.load(open(FLAGS.per_key_slide_size_plan))
         keys = policy_params.keys()
     else: 
-        keys = [i+1 for i in range(FLAGS.num_keys)]
+        keys = [i in range(FLAGS.num_keys)]
 
-    print(FLAGS.key_prio_policy)
     source_to_window_queue = simpy.Store(env)
     windows_to_mapper_queue = {
         key: PerKeyPriorityQueue(
@@ -113,7 +112,7 @@ def main(argv):
         source_queues=windows_to_mapper_queue,
         model_run_time_s=FLAGS.model_runtime_s,
         # TODO(simon): customize this once we want different key selection policy
-        key_selection_policy_cls=RoundRobinLoadBalancer(FLAGS.num_mapper_replicas),
+        key_selection_policy_cls=RoundRobinLoadBalancer(),
         num_replicas=FLAGS.num_mapper_replicas,
     )
     env.run(until=FLAGS.total_runtime_s)
