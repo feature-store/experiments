@@ -27,6 +27,28 @@ flags.DEFINE_string(
     help="Scheduling policy for STL operator", 
     required=True,
 )
+
+flags.DEFINE_integer(
+    "window_size",
+    default=None, 
+    help="Window size",
+    required=True,
+)
+
+
+flags.DEFINE_integer(
+    "slide_size",
+    default=None, 
+    help="Slide size",
+    required=True,
+)
+
+flags.DEFINE_integer(
+    "workers",
+    default=2, 
+    help="Number of workers for bottlenck operator",
+    required=False,
+)
 #flags.DEFINE_string(
 #    "wandb_source_artifact",
 #    default="stl-A4-keys-100-interval-1000000-events-200000:latest", 
@@ -148,7 +170,7 @@ class WriteFeatures(BaseTransform):
         df = pd.DataFrame({"key_id": [], "trend": [], "seasonality": [], "timestamp_ms": [], "processing_time": [], "runtime": [], "ingest_time": []})
         self.filename = filename 
         df.to_csv(self.filename, index=None)
-        self.file = open(self.filename, "a")
+        #self.file = open(self.filename, "a")
 
     def on_event(self, record: Record): 
         #row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
@@ -175,9 +197,10 @@ def main(argv):
 
     results_dir = f"{FLAGS.target_dir}/{FLAGS.experiment}"
     if not os.path.isdir(results_dir): os.mkdir(results_dir)
-    results_file = f"{results_dir}/results_{FLAGS.scheduler}.csv"
+    results_file = f"{results_dir}/results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}.csv"
 
 
+    #deploy_mode = "ray"
     deploy_mode = "local"
     #deploy_mode = "simpy"
     app = RalfApplication(RalfConfig(deploy_mode=deploy_mode))
@@ -205,7 +228,7 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=2)
     )
     ).transform(
-        Window(window_size=128), 
+        Window(window_size=FLAGS.window_size, slide_size=FLAGS.slide_size), 
         scheduler=FIFO(), 
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
@@ -223,7 +246,7 @@ def main(argv):
                 shared_env=env, 
                 processing_time_s=0.2, 
             ),         
-            ray_config=RayOperatorConfig(num_replicas=2)
+            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
         WriteFeatures(results_file)
