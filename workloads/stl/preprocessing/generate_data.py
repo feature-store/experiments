@@ -120,7 +120,7 @@ def extend_timeseries(source_key, target_key):
     generated_outlier = [0] * generated_length
     generated_seasonality = [0] * generated_length
 
-    print(repeat_length, len(trend_subtracted_series))
+    #print(repeat_length, len(trend_subtracted_series))
 
     for i in range(generated_length):
         if count >= repeat_length:
@@ -154,7 +154,7 @@ def extend_timeseries(source_key, target_key):
     # assign timestamps 
     interval_ms = int(FLAGS.time_interval_ms * FLAGS.num_keys / FLAGS.num_events)
     timestamp_ms = [ts for ts in range(0, FLAGS.time_interval_ms, interval_ms)]
-    print(timestamp_ms)
+    #print(timestamp_ms)
     #print(len(timestamp_ms), len(new_df.index))
     new_df["timestamp_ms"] = timestamp_ms
     #print(data_dir)
@@ -183,18 +183,42 @@ def create_events_df(keys, prefix=""):
     print("sorting", len(df.index))
     return df.sort_values(by=["timestamp_ms", "key_id"])
 
-def create_queries_df(keys): 
+def create_queries_df(keys, data_dir, start_index=0): 
 
     num_queries_per_key = int(FLAGS.num_queries / len(keys))
+
+    key_col = []
+    val_col = []
+    time_col = []
+    for key in keys: 
+        df = pd.read_csv(os.path.join(data_dir, f"{key}.csv"))
+        interval = int(len(df.index) / num_queries_per_key)
+        v = df[df.index % interval == 0].value.tolist()
+        t = df[df.index % interval == 0].timestamp_ms.tolist()
+        assert len(v) == num_queries_per_key, f"Invalid length {len(v)}, {num_queries_per_key}, {len(df.index)}, interval {interval}"
+        assert len(t) == num_queries_per_key 
+
+        key_col += [key] * num_queries_per_key
+        val_col += v
+        time_col += t
+
+
+    print(len(key_col), FLAGS.num_queries)
+
     queries_df = pd.DataFrame({
-        "key_id": list(keys) * num_queries_per_key, 
+        "key_id": key_col, 
+        "value": val_col, 
+        "timestamp_ms": time_col,
         "query_id": range(0, FLAGS.num_queries)
     })
 
-    interval_ms = int(FLAGS.time_interval_ms * FLAGS.num_keys / FLAGS.num_queries) 
-    timestamp_ms = [ts for key in keys for ts in range(0, FLAGS.time_interval_ms, interval_ms)]
+    #queries_df = pd.DataFrame({ "key_id": list(keys) * num_queries_per_key, "query_id": range(0, FLAGS.num_queries)
+    #})
 
-    queries_df["timestamp_ms"] = timestamp_ms
+    #interval_ms = int(FLAGS.time_interval_ms * FLAGS.num_keys / FLAGS.num_queries) 
+    #timestamp_ms = [ts for key in keys for ts in range(0, FLAGS.time_interval_ms, interval_ms)]
+
+    #queries_df["timestamp_ms"] = timestamp_ms
     return queries_df.sort_values(by=["timestamp_ms"])
 
 def create_features_df(key, data_dir): 
@@ -285,7 +309,7 @@ def main(argv):
 
     assert events_df.timestamp_ms.max() < FLAGS.time_interval_ms
     
-    queries_df = create_queries_df(target_keys)
+    queries_df = create_queries_df(target_keys, data_dir=f"{dataset_name}/extended_data")
     queries_df.to_csv(f"{dataset_name}/queries.csv")
 
     assert queries_df.timestamp_ms.max() < FLAGS.time_interval_ms
