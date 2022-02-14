@@ -1,13 +1,20 @@
 from absl import app, flags
 import random
+import json
 
 import statistics
 import pandas as pd
 import os
 from multiprocessing import Pool
 import configparser
-
+from tqdm import tqdm
 from statsmodels.tsa.seasonal import STL
+
+import sys 
+sys.path.insert(1, "../")
+from util import upload_dataset
+
+import wandb
 
 
 FLAGS = flags.FLAGS
@@ -84,13 +91,13 @@ def extend_timeseries(source_key, target_key):
     # from https://github.com/feature-store/experiments/blob/simon-stl/stl/extend_yahoo_dataset.ipynb
 
     max_length = int(FLAGS.num_events / FLAGS.num_keys) # number events per key
+    print("extending to", max_length)
     max_seasonality = FLAGS.max_seasonality
     noise = FLAGS.noise 
-    data_dir = FLAGS.data_dir
 
     # TODO: actually extend the time-series 
 
-    source_df = pd.read_csv(os.path.join(data_dir, "yahoo", FLAGS.dataset, f"{source_key}.csv"))
+    source_df = pd.read_csv(os.path.join(FLAGS.data_dir, "yahoo", FLAGS.dataset, f"{source_key}.csv"))
 
     max_outlier_value, min_outlier_value = max(source_df['noise']), min(source_df['noise'])
     mean, stddev = statistics.mean(source_df['noise']), statistics.stdev(source_df['noise'])
@@ -104,18 +111,22 @@ def extend_timeseries(source_key, target_key):
     # seasonality = np.repeat(seasonality, over_sampling_rate)
 
     repeat_length = (len(trend_subtracted_series) // max_seasonality) * max_seasonality
-    print('repeat', repeat_length)
+    #print('repeat', repeat_length)
 
     count = 0
-    generated_trend = [last_trend] * max_length
-    generated_noise = [0] * max_length
-    generated_outlier = [0] * max_length
-    generated_seasonality = [0] * max_length
+    generated_length = max_length - len(source_df.index) 
+    generated_trend = [last_trend] * generated_length
+    generated_noise = [0] * generated_length
+    generated_outlier = [0] * generated_length
+    generated_seasonality = [0] * generated_length
 
-    for i in range(max_length):
+    print(repeat_length, len(trend_subtracted_series))
+
+    for i in range(generated_length):
         if count >= repeat_length:
             count = 0
             last_trend = generated_trend[i-1]
+
         generated_trend[i] = last_trend + trend_subtracted_series[count]
         generated_seasonality[i] = seasonality[count]
         generated_noise[i] = random.gauss(mean, stddev)
@@ -127,7 +138,14 @@ def extend_timeseries(source_key, target_key):
                 generated_outlier[i] = min_outlier_value * random.randint(70,100) // 100
         count += 1
 
-    new_df = pd.DataFrame({"trend": generated_trend, "noise": generated_noise, "outlier": generated_outlier, "seasonality": generated_seasonality })
+    #print(seasonality)
+    #print(len(generated_seasonality))
+    new_df = pd.DataFrame({
+        "trend": source_df.trend.tolist() + generated_trend, 
+        "noise": source_df.noise.tolist() + generated_noise, 
+        "outlier": source_df.anomaly.tolist() + generated_outlier, 
+        "seasonality": seasonality.tolist() + generated_seasonality, 
+    })
     new_df['value'] = new_df['trend'] + new_df['noise'] + new_df['outlier'] + new_df['seasonality']
 
     assert len(new_df.index) == max_length, f"Wrong length {len(new_df.index)}"
@@ -136,11 +154,14 @@ def extend_timeseries(source_key, target_key):
     # assign timestamps 
     interval_ms = int(FLAGS.time_interval_ms * FLAGS.num_keys / FLAGS.num_events)
     timestamp_ms = [ts for ts in range(0, FLAGS.time_interval_ms, interval_ms)]
+    print(timestamp_ms)
+    #print(len(timestamp_ms), len(new_df.index))
     new_df["timestamp_ms"] = timestamp_ms
+    #print(data_dir)
+    #new_df.to_csv(os.path.join(data_dir, "extended_data", f"{target_key}.csv"))
+    #source_df.to_csv(os.path.join(data_dir, "data", f"{target_key}.csv"))
 
-    new_df.to_csv(os.path.join(FLAGS.data_dir, f"extended_{target_key}.csv"))
-
-    return new_df
+    return new_df, source_df
 
 def fit_stl(keys, data_dir): 
     # calculate baseline STL (ground truth / oracle)
@@ -150,10 +171,10 @@ def fit_stl_window(keys, data_dir, window_size, slide_size=1):
     # calculate baseline STL (predicted) 
     pass
 
-def create_events_df(keys): 
+def create_events_df(keys, prefix=""): 
     df = pd.concat([
         pd.read_csv(
-            os.path.join(FLAGS.data_dir, f"extended_{key}.csv")
+            f"{prefix}{key}.csv"
         ).assign(key_id=key) for key in keys
     ])
     assert len(df.index) == FLAGS.num_events, f"Invalid number of events {len(df.index)}"
@@ -176,9 +197,9 @@ def create_queries_df(keys):
     queries_df["timestamp_ms"] = timestamp_ms
     return queries_df.sort_values(by=["timestamp_ms"])
 
-def create_features_df(key): 
+def create_features_df(key, data_dir): 
 
-    df = pd.read_csv(os.path.join(FLAGS.data_dir, f"extended_{key}.csv"))
+    df = pd.read_csv(os.path.join(data_dir, "extended_data", f"{key}.csv"))
    
     seasonality = []
     trend = []
@@ -198,15 +219,19 @@ def create_features_df(key):
 
     df["seasonality"] = seasonality
     df["trend"] = trend 
+    df["key_id"] = key
 
-    df.to_csv(os.path.join(FLAGS.data_dir, f"best_features_{key}.csv"))
-    print("done", os.path.join(FLAGS.data_dir, f"best_features_{key}.csv"))
+    #df.to_csv(os.path.join(data_dir, "oracle", f"features_{key}.csv"))
+    print("done", f"features_{key}.csv")
+    return df
 
 
 def create_predictions_df(keys):
     pass
 
 def main(argv):
+
+    run = wandb.init(project="ralf-stl", entity="ucb-ralf", job_type="dataset-creation")
 
     # dataset configuration
     yahoo_dataset = FLAGS.dataset
@@ -220,40 +245,63 @@ def main(argv):
     results_dir = config["directory"]["results_dir"]
     data_dir = os.path.join(config["directory"]["data_dir"], yahoo_dataset)
 
-    dataset_name = f"stl-{yahoo_dataset}-{num_keys}-{time_interval_ms}-{num_events}"
+    dataset_name = f"stl-{yahoo_dataset}-keys-{num_keys}-interval-{time_interval_ms}-events-{num_events}"
+    print(dataset_name)
     dataset_config = {
         "yahoo_dataset": yahoo_dataset, 
         "num_keys": num_keys, 
         "time_interval_ms": time_interval_ms, 
         "num_events": num_events, 
-        "config": config["directory"]
+        "config": dict(config["directory"])
     }
+    
+    # setup experiment directory
+    if not os.path.isdir(dataset_name):
+        os.mkdir(dataset_name)
+        os.mkdir(f"{dataset_name}/extended_data")
+        os.mkdir(f"{dataset_name}/data")
+        os.mkdir(f"{dataset_name}/oracle")
+
+    open(f"{dataset_name}/config.json", "w").write(json.dumps(dataset_config))
+
 
     # read data 
     yahoo_num_keys = 100
     target_keys = range(1, num_keys + 1)
     source_keys = [i % yahoo_num_keys + 1 for i in target_keys]
 
-    max_length = 2000
-    noise = 1
-    max_seasonality = 7 * 24
-
-    num_workers = 16
+    num_workers = 8
     p = Pool(num_workers)
-    p.starmap(extend_timeseries, zip(source_keys, target_keys))
+    dfs = p.starmap(extend_timeseries, zip(source_keys, target_keys))
     p.close()
 
-    events_df = create_events_df(target_keys)
-    events_df.to_csv("events.csv")
+    for df, key in tqdm(zip(dfs, target_keys)): 
+        df[0].to_csv(f"{dataset_name}/extended_data/{key}.csv")
+        df[1].to_csv(f"{dataset_name}/data/{key}.csv")
 
+    #events_df = create_events_df(target_keys, prefix="yahoo/A4/")
+    events_df = create_events_df(target_keys, prefix=f"{dataset_name}/extended_data/")
+    events_df.to_csv(f"{dataset_name}/events.csv")
+
+    assert events_df.timestamp_ms.max() < FLAGS.time_interval_ms
     
     queries_df = create_queries_df(target_keys)
-    queries_df.to_csv(f"queries.csv")
+    queries_df.to_csv(f"{dataset_name}/queries.csv")
 
+    assert queries_df.timestamp_ms.max() < FLAGS.time_interval_ms
 
     p = Pool(num_workers)
-    p.map(create_features_df, target_keys)
+    dfs = p.starmap(create_features_df, [(key, dataset_name) for key in target_keys])
     p.close()
+
+    for df, key in tqdm(zip(dfs, target_keys)): 
+        df.to_csv(f"{dataset_name}/oracle/{key}.csv")
+
+    oracle_df = pd.concat(dfs).set_index(["key_id", "timestamp_ms"], drop=False)
+    oracle_df.to_csv(f"{dataset_name}/oracle_features.csv")
+
+
+    #df.to_csv(os.path.join(data_dir, "oracle", f"features_{key}.csv"))
 
 
     # TODO: Log dataset to W&B
@@ -266,6 +314,10 @@ def main(argv):
     # duplicate keys 
     
     # calculate optimal results
+    #upload_dataset(dataset_name, os.path.basename(dataset_name))
+    artifact = wandb.Artifact(dataset_name, type="dataset")
+    artifact.add_dir(dataset_name)
+    run.log_artifact(artifact)
 
 
 
