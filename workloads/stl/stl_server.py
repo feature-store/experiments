@@ -15,7 +15,6 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
     "experiment",
-    #default="stl-A4-keys-100-interval-1000000-events-200000", 
     default=None, 
     help="Experiment name",
     required=True,
@@ -49,19 +48,6 @@ flags.DEFINE_integer(
     help="Number of workers for bottlenck operator",
     required=False,
 )
-#flags.DEFINE_string(
-#    "wandb_source_artifact",
-#    default="stl-A4-keys-100-interval-1000000-events-200000:latest", 
-#    help="Wandb source data artifact",
-#    required=False,
-#)
-#
-#flags.DEFINE_string(
-#    "wandb_target_artifact",
-#    default="stl-results:latest", 
-#    help="Wandb results data artifact", 
-#    required=False,
-#)
 
 flags.DEFINE_string(
     "source_dir",
@@ -114,18 +100,15 @@ class DataSource(BaseTransform):
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
     
+        # TODO: fix this - very slow
         events = self.data[self.data["timestamp_ms"] == self.ts].to_dict('records')
+
         num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
         if num_remaining == 0:
             raise StopIteration()
         ingest_time = time.time()
         if len(events) > 0:
             print("sending events", self.ts, len(events), "remaining", num_remaining)
-        #if self.last_send_time > 0: 
-        #    wait_time = 0.001-(time.time()-self.last_send_time)
-        #    #print(self.ts, wait_time*1000)
-        #    if wait_time >= 0: time.sleep(wait_time)
-        #self.last_send_time = time.time()
         self.ts += 1
         return [
             Record(
@@ -185,23 +168,23 @@ def main(argv):
 
 
     if FLAGS.source_dir is None:
-
         # download data 
         run = wandb.init(project="ralf-stl", entity="ucb-ralf")
-        #artifact = run.use_artifact('ucb-ralf/stl/yahoo:v0', type='dataset')
         src_artifact = run.use_artifact(f"{FLAGS.experiment}:latest", type='dataset')
         data_dir = src_artifact.download()
         print(data_dir)
     else: 
+        # use existing data dir
         data_dir = FLAGS.source_dir
 
+    # create results file/directory
     results_dir = f"{FLAGS.target_dir}/{FLAGS.experiment}"
     if not os.path.isdir(results_dir): os.mkdir(results_dir)
     results_file = f"{results_dir}/results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}.csv"
 
 
     #deploy_mode = "ray"
-    deploy_mode = "local"
+    deploy_mode = "ray"
     #deploy_mode = "simpy"
     app = RalfApplication(RalfConfig(deploy_mode=deploy_mode))
 
@@ -217,6 +200,7 @@ def main(argv):
     }
 
     # create feature frames
+    # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
         DataSource(data_dir),
         operator_config=OperatorConfig(
