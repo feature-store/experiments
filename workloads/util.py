@@ -7,6 +7,7 @@ from typing import List
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
 # TODO: Common source operator to ingest events.csv
 
+
 def read_config(): 
     config = configparser.ConfigParser()
     config.read("config.yml")
@@ -103,16 +104,13 @@ class WriteFeatures(BaseTransform):
     """
 
     def __init__(self, filename: str, columns: List[str]):
-        #df = pd.DataFrame({"key_id": [], "trend": [], "seasonality": [], "timestamp_ms": [], "processing_time": [], "runtime": [], "ingest_time": []})
         df = pd.DataFrame({col: [] for col in columns})
+        self.cols = columns
         self.filename = filename 
         df.to_csv(self.filename, index=None)
 
     def on_event(self, record: Record): 
-        #row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
-        #df = pd.DataFrame([record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime, record.entry.ingest_time])
-        df = pd.DataFrame(record.entry)
+        print({col: [getattr(record.entry, col)] for col in self.cols})
+        df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
         open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
-        #print("wrote", df.T.to_csv())
-        print("wrote", record.entry.key, record.entry.timestamp)
        
