@@ -184,62 +184,6 @@ class STLFit(BaseTransform):
             )
         )
 
-
-#class WriteFeatures(BaseTransform): 
-#    def __init__(self, filename: str):
-#        df = pd.DataFrame({"key_id": [], "trend": [], "seasonality": [], "timestamp_ms": [], "processing_time": [], "runtime": [], "ingest_time": []})
-#        self.filename = filename 
-#        df.to_csv(self.filename, index=None)
-#        #self.file = open(self.filename, "a")
-#
-#    def on_event(self, record: Record): 
-#        #row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
-#        df = pd.DataFrame([record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime, record.entry.ingest_time])
-#        open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
-#        #print("wrote", df.T.to_csv())
-#        print("wrote", record.entry.key, record.entry.timestamp)
-        
-#class WriteFeatures(BaseTransform):
-#    def __init__(self, filename: str):
-#        df = pd.DataFrame(
-#            {
-#                "key_id": [],
-#                "trend": [],
-#                "seasonality": [],
-#                "timestamp_ms": [],
-#                "processing_time": [],
-#                "runtime": [],
-#                "ingest_time": [],
-#            }
-#        )
-#        self.filename = filename
-#        df.to_csv(self.filename, index=None)
-#        self.file = None
-#
-#    @property
-#    def _file(self):
-#        if self.file is None:
-#            self.file = open(self.filename, "a")
-#        return self.file
-#
-#    def on_event(self, record: Record):
-#        # row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
-#        df = pd.DataFrame(
-#            [
-#                record.entry.key,
-#                record.entry.trend,
-#                record.entry.seasonality,
-#                record.entry.timestamp,
-#                record.entry.processing_time,
-#                record.entry.runtime,
-#                record.entry.ingest_time,
-#            ]
-#        )
-#        self._file.write(df.T.to_csv(index=None, header=None))
-#        # print("wrote", df.T.to_csv())
-#        print("wrote", record.entry.key, record.entry.timestamp)
-
-
 def main(argv):
     print("Running STL pipeline on ralf...")
 
