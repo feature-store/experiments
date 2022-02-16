@@ -11,6 +11,9 @@ from statsmodels.tsa.seasonal import STL
 from absl import app, flags
 import wandb
 
+# might need to do  export PYTHONPATH='.'
+from workloads.util import WriteFeatures
+
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
@@ -148,19 +151,19 @@ class STLFit(BaseTransform):
 
         return Record(TimeSeriesValue(key=record.entry.key, trend=trend, seasonality=seasonality, timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time(), runtime=time.time()-st))
 
-class WriteFeatures(BaseTransform): 
-    def __init__(self, filename: str):
-        df = pd.DataFrame({"key_id": [], "trend": [], "seasonality": [], "timestamp_ms": [], "processing_time": [], "runtime": [], "ingest_time": []})
-        self.filename = filename 
-        df.to_csv(self.filename, index=None)
-        #self.file = open(self.filename, "a")
-
-    def on_event(self, record: Record): 
-        #row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
-        df = pd.DataFrame([record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime, record.entry.ingest_time])
-        open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
-        #print("wrote", df.T.to_csv())
-        print("wrote", record.entry.key, record.entry.timestamp)
+#class WriteFeatures(BaseTransform): 
+#    def __init__(self, filename: str):
+#        df = pd.DataFrame({"key_id": [], "trend": [], "seasonality": [], "timestamp_ms": [], "processing_time": [], "runtime": [], "ingest_time": []})
+#        self.filename = filename 
+#        df.to_csv(self.filename, index=None)
+#        #self.file = open(self.filename, "a")
+#
+#    def on_event(self, record: Record): 
+#        #row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
+#        df = pd.DataFrame([record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime, record.entry.ingest_time])
+#        open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
+#        #print("wrote", df.T.to_csv())
+#        print("wrote", record.entry.key, record.entry.timestamp)
         
 
 def main(argv):
@@ -233,7 +236,7 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
-        WriteFeatures(results_file)
+        WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
     )
 
     app.deploy()
