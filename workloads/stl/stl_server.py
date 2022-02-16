@@ -11,6 +11,9 @@ from statsmodels.tsa.seasonal import STL
 from absl import app, flags
 import wandb
 
+# might need to do  export PYTHONPATH='.'
+from workloads.util import WriteFeatures
+
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
@@ -84,10 +87,10 @@ class WindowValue:
 
 @dataclass
 class TimeSeriesValue:
-    key: str
+    key_id: str
     trend: float
     seasonality: List[float]
-    timestamp: int
+    timestamp_ms: int
     ingest_time: float
     processing_time: int
     runtime: float
@@ -171,57 +174,15 @@ class STLFit(BaseTransform):
 
         return Record(
             TimeSeriesValue(
-                key=record.entry.key,
+                key_id=record.entry.key,
                 trend=trend,
                 seasonality=seasonality,
-                timestamp=record.entry.timestamp,
+                timestamp_ms=record.entry.timestamp,
                 ingest_time=record.entry.ingest_time,
                 processing_time=time.time(),
                 runtime=time.time() - st,
             )
         )
-
-
-class WriteFeatures(BaseTransform):
-    def __init__(self, filename: str):
-        df = pd.DataFrame(
-            {
-                "key_id": [],
-                "trend": [],
-                "seasonality": [],
-                "timestamp_ms": [],
-                "processing_time": [],
-                "runtime": [],
-                "ingest_time": [],
-            }
-        )
-        self.filename = filename
-        df.to_csv(self.filename, index=None)
-        self.file = None
-
-    @property
-    def _file(self):
-        if self.file is None:
-            self.file = open(self.filename, "a")
-        return self.file
-
-    def on_event(self, record: Record):
-        # row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
-        df = pd.DataFrame(
-            [
-                record.entry.key,
-                record.entry.trend,
-                record.entry.seasonality,
-                record.entry.timestamp,
-                record.entry.processing_time,
-                record.entry.runtime,
-                record.entry.ingest_time,
-            ]
-        )
-        self._file.write(df.T.to_csv(index=None, header=None))
-        # print("wrote", df.T.to_csv())
-        print("wrote", record.entry.key, record.entry.timestamp)
-
 
 def main(argv):
     print("Running STL pipeline on ralf...")
@@ -266,7 +227,7 @@ def main(argv):
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
             ),
-            ray_config=RayOperatorConfig(num_replicas=2),
+            ray_config=RayOperatorConfig(num_replicas=1),
         ),
     ).transform(
         Window(window_size=FLAGS.window_size, slide_size=FLAGS.slide_size),
@@ -284,12 +245,14 @@ def main(argv):
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
-                shared_env=env,
-                processing_time_s=0.2,
-            ),
-            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers),
-        ),
-    ).transform(WriteFeatures(results_file))
+                shared_env=env, 
+                processing_time_s=0.2, 
+            ),         
+            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
+        )
+    ).transform(
+        WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
+    )
 
     app.deploy()
 
