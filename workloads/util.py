@@ -28,11 +28,13 @@ def download_dir(name, source_dir, target_dir):
     aws_secret_access_key = cred["aws_secret_access_key"] 
 
     # download form s3
-    s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
-    bucket = s3.Bucket("feature-store-datasets")
-    objs = list(bucket.objects.folder(Prefix = f"{source_dir}/{name}")) 
+    #s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    #bucket = s3.Bucket("feature-store-datasets")
+    #objs = list(bucket.objects.folder(Prefix = f"{source_dir}/{name}")) 
+    objs  = s3.list_objects(Bucket="feature-store-datasets", Prefix=f"{source_dir}/{name}")
     if len(objs) == 0: 
-        print("Bucket is empty or does not exist", bucket.objects.folder(Prefix = source_dir))
+        print("Bucket is empty or does not exist", s3.list_objects(Bucket="feature-store-datasets", Prefix=f"{source_dir}"))
         return None
 
     # create local directory
@@ -40,9 +42,13 @@ def download_dir(name, source_dir, target_dir):
         os.mkdir(os.path.join(target_dir, name))
 
     # download objects
-    for obj in objs: 
-        print(obj.key, "target", os.path.join(target_dir, name, obj.key.replace(source_dir, "")))
-        bucket.download_file(obj.key, os.path.join(target_dir, name, obj.key.replace(source_dir, "")))
+    print(objs)
+    for obj in objs['Contents']: 
+        key = obj['Key']
+        target = target_dir + key.replace(source_dir, "")
+        print(key, target)
+        #bucket.download_file(obj.key, os.path.join(target_dir, name, obj.key.replace(source_dir, "")))
+        s3.download_file("feature-store-datasets", key, target)
 
     return os.path.join(target_dir, name)
 
@@ -56,17 +62,24 @@ def upload_dir(name, source_dir, target_dir):
     s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
     #bucket = s3.Bucket("feature-store-datasets")
 
-    print(f"{target_dir}/{name}/f")
+    print(f"Uploading dataset {name} from {source_dir} to {target_dir}")
+
     for root,dirs,files in os.walk(os.path.join(source_dir, name)):
         for f in files: 
-            print("uploading", root, f)
-            s3.upload_file(os.path.join(root, f), "feature-store-datasets", f"{target_dir}/{name}/f")
+            key = os.path.join(root, f).replace(source_dir, "")
+            print(target_dir, name, key)
+            target = target_dir + key
+            print("uploading", root, target_dir, target)
+            assert os.path.exists(os.path.join(root, f))
+            s3.upload_file(os.path.join(root, f), "feature-store-datasets", target)
 
     return f"{target_dir}/{name}"
 
 def use_dataset(name, redownload = False):
     config = read_config()
-    
+   
+    path = os.path.join(config["dataset_dir"], name)
+    print(path)
     if not os.path.isdir(path) or redownload: 
         # download form s3
         print("Downloading from aws:", config["aws_dir"])
@@ -119,5 +132,5 @@ class WriteFeatures(BaseTransform):
     def on_event(self, record: Record): 
         #print({col: [getattr(record.entry, col)] for col in self.cols})
         df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
-        self._file.write(df.T.to_csv(index=None, header=None))
+        self._file.write(df.to_csv(index=None, header=None))
        
