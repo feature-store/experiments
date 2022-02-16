@@ -10,28 +10,29 @@ import configparser
 from tqdm import tqdm
 from statsmodels.tsa.seasonal import STL
 
-import sys 
-sys.path.insert(1, "../")
-from util import upload_dataset
+#import sys 
+#sys.path.insert(1, "../")
+#from util import upload_dataset
+from workloads.util import read_config, use_dataset, log_dataset
 
 import wandb
 
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string(
-    "data_dir",
-    default=None,
-    help="Dataset directory",
-    required=True,
-)
-
-
-flags.DEFINE_string(
-    "dataset",
-    default="A4",
-    help="Yahoo dataset name",
-)
+#flags.DEFINE_string(
+#    "data_dir",
+#    default=None,
+#    help="Dataset directory",
+#    required=True,
+#)
+#
+#
+#flags.DEFINE_string(
+#    "dataset",
+#    default="A4",
+#    help="Yahoo dataset name",
+#)
 
 flags.DEFINE_integer(
     "num_keys",
@@ -255,38 +256,43 @@ def create_predictions_df(keys):
 
 def main(argv):
 
-    run = wandb.init(project="ralf-stl", entity="ucb-ralf", job_type="dataset-creation")
+    #run = wandb.init(project="ralf-stl", entity="ucb-ralf", job_type="dataset-creation")
+    source_dataset = use_dataset("yahoo/A4")
+    config = read_config() 
 
     # dataset configuration
-    yahoo_dataset = FLAGS.dataset
+    #yahoo_dataset = FLAGS.dataset
     num_keys = FLAGS.num_keys
     time_interval_ms = FLAGS.time_interval_ms
     num_events = FLAGS.num_events
+    num_queries = FLAGS.num_queries
 
-    # configuration file
-    config = configparser.ConfigParser()
-    config.read("config.yml") 
-    results_dir = config["directory"]["results_dir"]
-    data_dir = os.path.join(config["directory"]["data_dir"], yahoo_dataset)
+    ## configuration file
+    #config = configparser.ConfigParser()
+    #config.read("config.yml") 
+    #results_dir = config["directory"]["results_dir"]
+    #data_dir = os.path.join(config["directory"]["data_dir"], yahoo_dataset)
 
     dataset_name = f"stl-{yahoo_dataset}-keys-{num_keys}-interval-{time_interval_ms}-events-{num_events}"
+    dataset_dir = os.path.join(config["dataset_dir"] , dataset_name)
     print(dataset_name)
     dataset_config = {
-        "yahoo_dataset": yahoo_dataset, 
+        "source_dataset": source_dataset, 
         "num_keys": num_keys, 
         "time_interval_ms": time_interval_ms, 
         "num_events": num_events, 
-        "config": dict(config["directory"])
+        "num_queries": num_queries, 
+        "config": config
     }
     
     # setup experiment directory
-    if not os.path.isdir(dataset_name):
-        os.mkdir(dataset_name)
-        os.mkdir(f"{dataset_name}/extended_data")
-        os.mkdir(f"{dataset_name}/data")
-        os.mkdir(f"{dataset_name}/oracle")
+    if not os.path.isdir(dataset_dir):
+        os.mkdir(dataset_dir)
+        os.mkdir(f"{dataset_dir}/extended_data")
+        os.mkdir(f"{dataset_dir}/data")
+        os.mkdir(f"{dataset_dir}/oracle")
 
-    open(f"{dataset_name}/config.json", "w").write(json.dumps(dataset_config))
+    open(f"{dataset_dir}/config.json", "w").write(json.dumps(dataset_config))
 
 
     # read data 
@@ -300,29 +306,31 @@ def main(argv):
     p.close()
 
     for df, key in tqdm(zip(dfs, target_keys)): 
-        df[0].to_csv(f"{dataset_name}/extended_data/{key}.csv")
-        df[1].to_csv(f"{dataset_name}/data/{key}.csv")
+        df[0].to_csv(f"{dataset_dir}/extended_data/{key}.csv")
+        df[1].to_csv(f"{dataset_dir}/data/{key}.csv")
 
     #events_df = create_events_df(target_keys, prefix="yahoo/A4/")
-    events_df = create_events_df(target_keys, prefix=f"{dataset_name}/extended_data/")
-    events_df.to_csv(f"{dataset_name}/events.csv")
+    events_df = create_events_df(target_keys, prefix=f"{dataset_dir}/extended_data/")
+    events_df.to_csv(f"{dataset_dir}/events.csv")
 
     assert events_df.timestamp_ms.max() < FLAGS.time_interval_ms
     
-    queries_df = create_queries_df(target_keys, data_dir=f"{dataset_name}/extended_data")
-    queries_df.to_csv(f"{dataset_name}/queries.csv")
+    queries_df = create_queries_df(target_keys, data_dir=f"{dataset_dir}/extended_data")
+    queries_df.to_csv(f"{dataset_dir}/queries.csv")
 
     assert queries_df.timestamp_ms.max() < FLAGS.time_interval_ms
 
     p = Pool(num_workers)
-    dfs = p.starmap(create_features_df, [(key, dataset_name) for key in target_keys])
+    dfs = p.starmap(create_features_df, [(key, dataset_dir) for key in target_keys])
     p.close()
 
     for df, key in tqdm(zip(dfs, target_keys)): 
-        df.to_csv(f"{dataset_name}/oracle/{key}.csv")
+        df.to_csv(f"{dataset_dir}/oracle/{key}.csv")
 
     oracle_df = pd.concat(dfs).set_index(["key_id", "timestamp_ms"], drop=False)
-    oracle_df.to_csv(f"{dataset_name}/oracle_features.csv")
+    oracle_df.to_csv(f"{dataset_dir}/oracle_features.csv")
+
+    log_dataset(dataset_name)
 
 
     #df.to_csv(os.path.join(data_dir, "oracle", f"features_{key}.csv"))
@@ -337,11 +345,11 @@ def main(argv):
 
     # duplicate keys 
     
-    # calculate optimal results
-    #upload_dataset(dataset_name, os.path.basename(dataset_name))
-    artifact = wandb.Artifact(dataset_name, type="dataset")
-    artifact.add_dir(dataset_name)
-    run.log_artifact(artifact)
+    ## calculate optimal results
+    ##upload_dataset(dataset_name, os.path.basename(dataset_name))
+    #artifact = wandb.Artifact(dataset_name, type="dataset")
+    #artifact.add_dir(dataset_name)
+    #run.log_artifact(artifact)
 
 
 

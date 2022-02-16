@@ -104,6 +104,7 @@ class DataSource(BaseTransform):
         self.ts = 0
         self.data = events_df
         self.last_send_time = -1
+        self.total = len(events_df.index)
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
@@ -113,9 +114,11 @@ class DataSource(BaseTransform):
         num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
         if num_remaining == 0:
             raise StopIteration()
+        else: 
+            print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
         ingest_time = time.time()
-        if len(events) > 0:
-            print("sending events", self.ts, len(events), "remaining", num_remaining)
+        #if len(events) > 0:
+        #    print("sending events", self.ts, len(events), "remaining", num_remaining)
         self.ts += 1
         return [
             Record(
@@ -202,6 +205,7 @@ def main(argv):
     if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
     results_file = f"{results_dir}/results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}.csv"
+    print("results file", results_file)
 
     # deploy_mode = "ray"
     deploy_mode = "ray"
@@ -267,6 +271,7 @@ def main(argv):
     target_artifact.add_dir(results_dir)
     run.log_artifact(target_artifact)
     print("Completed run!")
+    print(results_file)
 
 
 if __name__ == "__main__":
