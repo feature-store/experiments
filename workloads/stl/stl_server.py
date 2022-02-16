@@ -197,7 +197,13 @@ class WriteFeatures(BaseTransform):
         )
         self.filename = filename
         df.to_csv(self.filename, index=None)
-        # self.file = open(self.filename, "a")
+        self.file = None
+
+    @property
+    def _file(self):
+        if self.file is None:
+            self.file = open(self.filename, "a")
+        return self.file
 
     def on_event(self, record: Record):
         # row = ','.join([str(col) for col in [record.entry.key, record.entry.trend, record.entry.seasonality, record.entry.timestamp, record.entry.processing_time, record.entry.runtime]]) + "\n"
@@ -212,7 +218,7 @@ class WriteFeatures(BaseTransform):
                 record.entry.ingest_time,
             ]
         )
-        open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
+        self._file.write(df.T.to_csv(index=None, header=None))
         # print("wrote", df.T.to_csv())
         print("wrote", record.entry.key, record.entry.timestamp)
 
