@@ -1,0 +1,7 @@
+[default] 
+root_dir = /data/wooders/ralf-vldb/ 
+results_dir = %(root_dir)s/results
+dataset_dir = %(root_dir)s/datasets
+credentials = /home/eecs/wooders/experiments/ralf-vldb.json
+aws_dir = vldb
+aws_bucket = feature-store-datasets
