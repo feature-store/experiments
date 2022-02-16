@@ -108,9 +108,17 @@ class WriteFeatures(BaseTransform):
         self.cols = columns
         self.filename = filename 
         df.to_csv(self.filename, index=None)
+        self.file = None
+
+    @property
+    def _file(self):
+        if self.file is None:
+            self.file = open(self.filename, "a")
+        return self.file
 
     def on_event(self, record: Record): 
         print({col: [getattr(record.entry, col)] for col in self.cols})
         df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
+        self._file.write(df.T.to_csv(index=None, header=None))
         open(self.filename, "a").write(df.T.to_csv(index=None, header=None))
        
