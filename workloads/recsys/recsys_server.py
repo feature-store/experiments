@@ -101,7 +101,6 @@ class DataSource(BaseTransform):
     
         # TODO: fix this - very slow
         events = self.data[self.data["timestamp"] == self.ts].to_dict('records')
-        print(events)
         num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
         if num_remaining == 0:
             raise StopIteration()
@@ -136,10 +135,10 @@ class User(BaseTransform):
         
         prediction = user_features.dot(movie_features.T)
         error = record.entry.rating - prediction
-        updated_user_features = self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
+        updated_user_features = user_features + self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
         self.user_features[user_id] = updated_user_features
 
-        return Record(UserValue(key=user_id, user_features=user_features, timestamp=record.entry.timestamp))
+        return Record(UserValue(key=user_id, user_features=updated_user_features, timestamp=record.entry.timestamp))
 
 class WriteFeatures(BaseTransform): 
     def __init__(self, file_path: str):
@@ -148,9 +147,10 @@ class WriteFeatures(BaseTransform):
         df.to_csv(self.filename, index=None)
 
     def on_event(self, record: Record): 
-        df = pd.DataFrame([record.entry.key, record.entry.user_features, record.entry.timestamp])
+        df = pd.DataFrame({'user_id': [record.entry.key], 'user_features': [list(record.entry.user_features)], 'timestamp': [record.entry.timestamp]})
+        temp_csv = df.to_csv(index=None, header=None)
         with open(self.filename, "a") as file:
-            file.write(df.T.to_csv(index=None, header=None))
+            file.write(temp_csv)
         print("wrote", record.entry.key, record.entry.timestamp)
 
 def get_features(file_path):
