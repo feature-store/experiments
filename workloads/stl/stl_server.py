@@ -12,7 +12,7 @@ from absl import app, flags
 import wandb
 
 # might need to do  export PYTHONPATH='.'
-from workloads.util import WriteFeatures
+from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
 
 FLAGS = flags.FLAGS
 
@@ -104,6 +104,7 @@ class DataSource(BaseTransform):
         self.ts = 0
         self.data = events_df
         self.last_send_time = -1
+        self.total = len(events_df.index)
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
@@ -113,9 +114,11 @@ class DataSource(BaseTransform):
         num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
         if num_remaining == 0:
             raise StopIteration()
+        else: 
+            print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
         ingest_time = time.time()
-        if len(events) > 0:
-            print("sending events", self.ts, len(events), "remaining", num_remaining)
+        #if len(events) > 0:
+        #    print("sending events", self.ts, len(events), "remaining", num_remaining)
         self.ts += 1
         return [
             Record(
@@ -187,21 +190,17 @@ class STLFit(BaseTransform):
 def main(argv):
     print("Running STL pipeline on ralf...")
 
-    if FLAGS.source_dir is None:
-        # download data
-        run = wandb.init(project="ralf-stl", entity="ucb-ralf")
-        src_artifact = run.use_artifact(f"{FLAGS.experiment}:latest", type="dataset")
-        data_dir = src_artifact.download()
-        print(data_dir)
-    else:
-        # use existing data dir
-        data_dir = FLAGS.source_dir
+    data_dir = use_dataset(FLAGS.experiment, redownload=False)
+    results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
+    name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}"
+    print("Using data from", data_dir)
+    print("Making results for", results_dir)
 
-    # create results file/directory
-    results_dir = f"{FLAGS.target_dir}/{FLAGS.experiment}"
+    ## create results file/directory
     if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
-    results_file = f"{results_dir}/results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}.csv"
+    results_file = f"{results_dir}/{name}.csv"
+    print("results file", results_file)
 
     # deploy_mode = "ray"
     deploy_mode = "ray"
@@ -260,13 +259,7 @@ def main(argv):
         env.run(100)
     app.wait()
 
-    print("logging to wandb")
-    if FLAGS.source_dir:
-        run = wandb.init(project="ralf-stl", entity="ucb-ralf")
-    target_artifact = wandb.Artifact(f"{FLAGS.experiment}-results", type="results")
-    target_artifact.add_dir(results_dir)
-    run.log_artifact(target_artifact)
-    print("Completed run!")
+    log_results(name)
 
 
 if __name__ == "__main__":
