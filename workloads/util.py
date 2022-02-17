@@ -10,7 +10,8 @@ from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Reco
 
 def read_config(): 
     config = configparser.ConfigParser()
-    config.read("config.yml")
+    # TODO: change
+    config.read("/home/eecs/wooders/experiments/config.yml")
     return { 
         "results_dir": config["default"]["results_dir"], 
         "dataset_dir": config["default"]["dataset_dir"], 
@@ -23,16 +24,23 @@ def read_credentials():
     return json.load(open(filename))
  
 def download_dir(name, source_dir, target_dir):
+    """
+    Download directory from s3 
+
+    :name: directory name (folder/expeirment name)
+    :source_dir: dataset/results local directory 
+    :target_dir: dataset/results folder in s3
+    """
+
     cred = read_credentials()
     aws_access_key_id = cred["aws_access_key_id"]
     aws_secret_access_key = cred["aws_secret_access_key"] 
 
     # download form s3
-    s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
-    bucket = s3.Bucket("feature-store-datasets")
-    objs = list(bucket.objects.folder(Prefix = f"{source_dir}/{name}")) 
+    s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    objs  = s3.list_objects(Bucket="feature-store-datasets", Prefix=f"{source_dir}/{name}")
     if len(objs) == 0: 
-        print("Bucket is empty or does not exist", bucket.objects.folder(Prefix = source_dir))
+        print("Bucket is empty or does not exist", s3.list_objects(Bucket="feature-store-datasets", Prefix=f"{source_dir}"))
         return None
 
     # create local directory
@@ -40,33 +48,43 @@ def download_dir(name, source_dir, target_dir):
         os.mkdir(os.path.join(target_dir, name))
 
     # download objects
-    for obj in objs: 
-        print(obj.key, "target", os.path.join(target_dir, name, obj.key.replace(source_dir, "")))
-        bucket.download_file(obj.key, os.path.join(target_dir, name, obj.key.replace(source_dir, "")))
+    for obj in objs['Contents']: 
+        key = obj['Key']
+        target = target_dir + key.replace(source_dir, "")
+        s3.download_file("feature-store-datasets", key, target)
 
     return os.path.join(target_dir, name)
 
 def upload_dir(name, source_dir, target_dir): 
+    """
+    Upload directory to s3
+
+    :name: directory name (folder/expeirment name)
+    :source_dir: dataset/results local directory 
+    :target_dir: dataset/results folder in s3
+    """
     cred = read_credentials()
     aws_access_key_id = cred["aws_access_key_id"]
     aws_secret_access_key = cred["aws_secret_access_key"] 
 
-    print(aws_access_key_id, aws_secret_access_key)
     # download form s3
     s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
-    #bucket = s3.Bucket("feature-store-datasets")
-
-    print(f"{target_dir}/{name}/f")
     for root,dirs,files in os.walk(os.path.join(source_dir, name)):
         for f in files: 
-            print("uploading", root, f)
-            s3.upload_file(os.path.join(root, f), "feature-store-datasets", f"{target_dir}/{name}/f")
+            key = os.path.join(root, f).replace(source_dir, "")
+            print(target_dir, name, key)
+            target = target_dir + key
+            print("uploading", root, target_dir, target)
+            assert os.path.exists(os.path.join(root, f))
+            s3.upload_file(os.path.join(root, f), "feature-store-datasets", target)
 
     return f"{target_dir}/{name}"
 
 def use_dataset(name, redownload = False):
     config = read_config()
-    
+   
+    path = os.path.join(config["dataset_dir"], name)
+    print(path)
     if not os.path.isdir(path) or redownload: 
         # download form s3
         print("Downloading from aws:", config["aws_dir"])
@@ -77,6 +95,7 @@ def use_dataset(name, redownload = False):
 def use_results(name, redownload = False):
     config = read_config()
     
+    path = os.path.join(config["results_dir"], name)
     if not os.path.isdir(path) or redownload: 
         # download form s3
         print("Downloading from aws:", config["aws_dir"])
@@ -85,10 +104,21 @@ def use_results(name, redownload = False):
     return os.path.join(config["results_dir"], name)
 
 def log_dataset(name):
+    """
+    Upload dataset folder to s3 bucket 
+
+    :name: folder name (corresponds to experiment name) - should already exists in dataset_dir
+    """
     config = read_config()
     return upload_dir(name, config["dataset_dir"], config["aws_dir"] + "/datasets")
 
 def log_results(name):
+    """
+    Upload results folder to s3 bucket 
+
+    :name: folder name (corresponds to experiment name) - should already exists in results_dir 
+    """
+
     config = read_config()
     return upload_dir(name, config["results_dir"], config["aws_dir"] + "/results")
 
@@ -119,5 +149,5 @@ class WriteFeatures(BaseTransform):
     def on_event(self, record: Record): 
         #print({col: [getattr(record.entry, col)] for col in self.cols})
         df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
-        self._file.write(df.T.to_csv(index=None, header=None))
+        self._file.write(df.to_csv(index=None, header=None))
        
