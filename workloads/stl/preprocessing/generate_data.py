@@ -64,13 +64,13 @@ flags.DEFINE_integer(
 
 flags.DEFINE_integer(
     "seasonality",
-    default=12,
+    default=168,
     help="Max seasonality for generated time-series"
 )
 
 flags.DEFINE_integer(
     "window_size",
-    default=24,
+    default=672,
     help="Max seasonality for generated time-series"
 )
 
@@ -92,7 +92,7 @@ def extend_timeseries(source_key, target_key):
     # from https://github.com/feature-store/experiments/blob/simon-stl/stl/extend_yahoo_dataset.ipynb
 
     max_length = int(FLAGS.num_events / FLAGS.num_keys) # number events per key
-    print("extending to", max_length)
+    #print("extending to", max_length)
     max_seasonality = FLAGS.max_seasonality
     noise = FLAGS.noise 
 
@@ -286,11 +286,12 @@ def main(argv):
     }
     
     # setup experiment directory
+    print("creating", dataset_dir)
     if not os.path.isdir(dataset_dir):
         os.mkdir(dataset_dir)
         os.mkdir(f"{dataset_dir}/extended_data")
         os.mkdir(f"{dataset_dir}/data")
-        os.mkdir(f"{dataset_dir}/oracle")
+        os.mkdir(f"{dataset_dir}/oracle_{FLAGS.window_size}")
 
     open(f"{dataset_dir}/config.json", "w").write(json.dumps(dataset_config))
 
@@ -300,7 +301,7 @@ def main(argv):
     target_keys = range(1, num_keys + 1)
     source_keys = [i % yahoo_num_keys + 1 for i in target_keys]
 
-    num_workers = 8
+    num_workers = 32
     p = Pool(num_workers)
     dfs = p.starmap(extend_timeseries, zip(source_keys, target_keys))
     p.close()
@@ -325,10 +326,10 @@ def main(argv):
     p.close()
 
     for df, key in tqdm(zip(dfs, target_keys)): 
-        df.to_csv(f"{dataset_dir}/oracle/{key}.csv")
+        df.to_csv(f"{dataset_dir}/oracle_{FLAGS.window_size}/{key}.csv")
 
     oracle_df = pd.concat(dfs).set_index(["key_id", "timestamp_ms"], drop=False)
-    oracle_df.to_csv(f"{dataset_dir}/oracle_features.csv")
+    oracle_df.to_csv(f"{dataset_dir}/oracle_features_{FLAGS.window_size}.csv")
 
     log_dataset(dataset_name)
 
