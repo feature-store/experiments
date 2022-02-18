@@ -1,0 +1,7 @@
+numpy
+pandas
+torch
+faiss-cpu
+transformers
+transformers4rec[pytorch,nvtabular]
+
