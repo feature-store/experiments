@@ -259,6 +259,9 @@ def main(argv):
         env.run(100)
     app.wait()
 
+    query_results_file = f"{results_dir}/{name}_features.csv"
+    query_file = f"{data_dir}/queries.csv"
+
     log_results(name)
 
 
