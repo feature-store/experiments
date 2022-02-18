@@ -28,7 +28,7 @@ flags.DEFINE_string(
 
 flags.DEFINE_integer(
     "workers",
-    default=2, 
+    default=1, 
     help="Number of workers for bottleneck operator",
     required=False,
 )
@@ -92,20 +92,22 @@ class UserValue:
 class DataSource(BaseTransform): 
     def __init__(self, file_path: str) -> None:
         events_df = pd.read_csv(file_path)
-
+        data = dict()
+        for timestamp in events_df["timestamp"].unique():
+            curr_timestep = events_df[events_df["timestamp"] == timestamp].to_dict('records')
+            data[timestamp] = curr_timestep
+        self.max_ts = max(list(data.keys()))
         self.ts = 0
-        self.data = events_df
+        self.data = data
         self.last_send_time = -1
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
     
         # TODO: fix this - very slow
-        events = self.data[self.data["timestamp"] == self.ts].to_dict('records')
-        num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
-        if num_remaining == 0:
+        events = self.data[self.ts]
+        #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
+        if self.ts == self.max_ts:
             raise StopIteration()
-        if len(events) > 0:
-            print("sending events", self.ts, len(events), "remaining", num_remaining)
         self.ts += 1
         return [
             Record(
