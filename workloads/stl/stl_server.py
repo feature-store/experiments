@@ -88,7 +88,7 @@ class WindowValue:
 @dataclass
 class TimeSeriesValue:
     key_id: str
-    trend: float
+    trend: List[float]
     seasonality: List[float]
     timestamp_ms: int
     ingest_time: float
@@ -106,16 +106,27 @@ class DataSource(BaseTransform):
         self.last_send_time = -1
         self.total = len(events_df.index)
 
+        self.ts_events = dict(tuple(events_df.groupby("timestamp_ms")))
+        print(self.ts_events.keys())
+        self.max_ts = events_df.timestamp_ms.max()
+
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
         # TODO: fix this - very slow
-        events = self.data[self.data["timestamp_ms"] == self.ts].to_dict("records")
+        #events = self.data[self.data["timestamp_ms"] == self.ts].to_dict("records")
 
-        num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
-        if num_remaining == 0:
+        #num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
+        #if num_remaining == 0:
+        if self.ts >= self.max_ts: 
             raise StopIteration()
         else: 
-            print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
+            #print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
+            events = []
+            if self.ts in self.ts_events: 
+                events = self.ts_events[self.ts]
+                print(events)
+
+
         ingest_time = time.time()
         #if len(events) > 0:
         #    print("sending events", self.ts, len(events), "remaining", num_remaining)
@@ -171,7 +182,8 @@ class STLFit(BaseTransform):
         st = time.time()
         stl_result = STL(record.entry.value, period=self.seasonality, robust=True).fit()
         # print(time.time() - st, st)
-        trend = stl_result.trend[-1]
+        trend = list(stl_result.trend)
+        # TODO: potentially interpolate trend? 
         seasonality = list(stl_result.seasonal[-(self.seasonality + 1) : -1])
         # print(record.entry.key, trend, seasonality)
 
