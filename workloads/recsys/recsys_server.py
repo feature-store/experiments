@@ -1,3 +1,4 @@
+from ast import Global
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ import simpy
 import os
 from absl import app, flags
 import wandb
+import ray
 
 FLAGS = flags.FLAGS
 
@@ -89,26 +91,34 @@ class UserValue:
     user_features: np.array
     timestamp: int
 
+@ray.remote
+class GlobalTimestamp:
+    def __init__(self):
+        self.ts = 0
+    def incr_ts(self):
+        self.ts += 1
+    def get_ts(self):
+        return self.ts
+
 class DataSource(BaseTransform): 
-    def __init__(self, file_path: str) -> None:
+    def __init__(self, file_path: str, ts: GlobalTimestamp) -> None:
         events_df = pd.read_csv(file_path)
         data = dict()
         for timestamp in events_df["timestamp"].unique():
             curr_timestep = events_df[events_df["timestamp"] == timestamp].to_dict('records')
             data[timestamp] = curr_timestep
         self.max_ts = max(list(data.keys()))
-        self.ts = 0
+        self.ts = ts
         self.data = data
         self.last_send_time = -1
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
-    
-        # TODO: fix this - very slow
-        events = self.data[self.ts]
+        curr_timestamp = ray.get(self.ts.get_ts.remote())
+        events = self.data[curr_timestamp]
         #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
-        if self.ts == self.max_ts:
+        if curr_timestamp == self.max_ts:
             raise StopIteration()
-        self.ts += 1
+        self.ts.incr_ts.remote()
         return [
             Record(
                 SourceValue(key=e["movie_id"], user_id=e["user_id"], timestamp=e["timestamp"], rating=e["rating"])
@@ -143,13 +153,15 @@ class User(BaseTransform):
         return Record(UserValue(key=user_id, user_features=updated_user_features, timestamp=record.entry.timestamp))
 
 class WriteFeatures(BaseTransform): 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, timestamp: GlobalTimestamp):
         df = pd.DataFrame({"user_id": [], "user_features": [], "timestamp": []})
         self.filename = file_path 
+        self.ts = timestamp
         df.to_csv(self.filename, index=None)
 
     def on_event(self, record: Record): 
-        df = pd.DataFrame({'user_id': [record.entry.key], 'user_features': [list(record.entry.user_features)], 'timestamp': [record.entry.timestamp]})
+        curr_timestamp = ray.get(self.ts.get_ts.remote())
+        df = pd.DataFrame({'user_id': [record.entry.key], 'user_features': [list(record.entry.user_features)], 'timestamp': [curr_timestamp]})
         temp_csv = df.to_csv(index=None, header=None)
         with open(self.filename, "a") as file:
             file.write(temp_csv)
@@ -205,15 +217,16 @@ def main(argv):
 
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
+    timestamp = GlobalTimestamp.remote()
     movie_ff = app.source(
-        DataSource(source_file),
+        DataSource(source_file, timestamp),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, 
                 processing_time_s=0.01, 
                 stop_after_s=10
             ),         
-            ray_config=RayOperatorConfig(num_replicas=2)
+            ray_config=RayOperatorConfig(num_replicas=1)
     )
     ).transform(
         Movie(movie_features), 
@@ -223,7 +236,7 @@ def main(argv):
                 shared_env=env, 
                 processing_time_s=0.01, 
             ),         
-            ray_config=RayOperatorConfig(num_replicas=2)
+            ray_config=RayOperatorConfig(num_replicas=1)
         )
     )
     user_ff = movie_ff.transform(
@@ -237,7 +250,7 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
-        WriteFeatures(results_file)
+        WriteFeatures(results_file, timestamp)
     )
 
     app.deploy()
