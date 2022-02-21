@@ -163,6 +163,8 @@ class WriteFeatures(BaseTransform):
         curr_timestamp = ray.get(self.ts.get_ts.remote())
         df = pd.DataFrame({'user_id': [record.entry.key], 'user_features': [list(record.entry.user_features)], 'timestamp': [curr_timestamp]})
         temp_csv = df.to_csv(index=None, header=None)
+        #record_csv = f"{record.entry.key}, {list(record.entry.user_features)}, {curr_timestamp}\n"
+        #print(record_csv == temp_csv)
         with open(self.filename, "a") as file:
             file.write(temp_csv)
         print("wrote", record.entry.key, record.entry.timestamp)
