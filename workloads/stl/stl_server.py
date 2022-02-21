@@ -1,4 +1,4 @@
-from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
+from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
 from typing import List
@@ -68,6 +68,53 @@ flags.DEFINE_string(
     required=False,
 )
 
+class STLLIFO(BaseScheduler):
+    def __init__(self, keys: List[str]) -> None:
+        self.waker: Optional[threading.Event] = None
+        self.stop_iteration = None
+
+        #self.queue = {key: [] for key in keys}
+        self.keys = keys
+        self.queue: List[Record] = []
+
+    def push_event(self, record: Record):
+        self.wake_waiter_if_needed()
+        if record.is_stop_iteration():
+            #self.stop_iteration = record
+            #self.queue.insert(0, record)
+            self.queue.append(record)
+        else:
+            index = -1
+            for i in range(len(self.queue)): 
+                if not self.queue[i].is_stop_iteration() and self.queue[i].entry.key == record.entry.key: # override
+                    self.queue[i] = record
+                    index = i 
+            if index < 0:
+                self.queue.append(record)
+
+            assert len(self.queue) <= len(self.keys), f"Queue is too long {len(self.queue)}, limit: {len(self.keys)}"
+
+    #def choose_key(self): 
+    #    start_key = self.key_index
+    #    queue = []
+    #    while len(queue) == 0:
+
+    #        if self.key_index >= len(list(self.queue.keys())): 
+    #            self.key_index = 0 
+
+    #        queue = list(self.queue.keys())[self.key_index]
+    #        self.key_index += 1
+
+
+    def pop_event(self) -> Record:
+        if self.stop_iteration: # return stop iteration record
+            return self.stop_iteration
+        if len(self.queue) == 0:
+            return Record.make_wait_event(self.new_waker())
+
+        return self.queue.pop(0)
+
+
 
 @dataclass
 class SourceValue:
@@ -88,7 +135,7 @@ class WindowValue:
 @dataclass
 class TimeSeriesValue:
     key_id: str
-    trend: float
+    trend: List[float]
     seasonality: List[float]
     timestamp_ms: int
     ingest_time: float
@@ -97,7 +144,7 @@ class TimeSeriesValue:
 
 
 class DataSource(BaseTransform):
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: str, log_filename: str) -> None:
 
         events_df = pd.read_csv(f"{data_dir}/events.csv")
 
@@ -106,20 +153,47 @@ class DataSource(BaseTransform):
         self.last_send_time = -1
         self.total = len(events_df.index)
 
+        self.ts_events = dict(tuple(events_df.groupby("timestamp_ms")))
+        self.ts_events = {key: self.ts_events[key].to_dict("records") for key in self.ts_events.keys()}
+        self.max_ts = events_df.timestamp_ms.max()
+        self.total_sent = 0
+
+        # log when events are sent 
+        df = pd.DataFrame({"timestamp_ms": [], "timestamp": []})
+        self.filename = log_filename
+        df.to_csv(self.filename, index=None)
+        self.file = None
+
+    @property
+    def _file(self):
+        if self.file is None:
+            self.file = open(self.filename, "a")
+        return self.file
+
+
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
-        # TODO: fix this - very slow
-        events = self.data[self.data["timestamp_ms"] == self.ts].to_dict("records")
-
-        num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
-        if num_remaining == 0:
+        if self.ts >= self.max_ts: 
+            print("completed iteration", self.total_sent)
             raise StopIteration()
         else: 
-            print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
+            events = []
+            if self.ts in self.ts_events: 
+                events = self.ts_events[self.ts]
+                #print(events)
+            self.total_sent += len(events)
+
+
         ingest_time = time.time()
-        #if len(events) > 0:
-        #    print("sending events", self.ts, len(events), "remaining", num_remaining)
+
+        # log timestamps 
+        df = pd.DataFrame({"timestamp_ms": [self.ts], "timestamp": [ingest_time]})
+        self._file.write(df.to_csv(index=None, header=None))
+
+        if self.ts % 1000 == 0: 
+            print(f"Sent events {ingest_time}: {self.total_sent} / {self.total}")
         self.ts += 1
+        time.sleep(0.001)
         return [
             Record(
                 SourceValue(
@@ -171,7 +245,8 @@ class STLFit(BaseTransform):
         st = time.time()
         stl_result = STL(record.entry.value, period=self.seasonality, robust=True).fit()
         # print(time.time() - st, st)
-        trend = stl_result.trend[-1]
+        trend = list(stl_result.trend)
+        # TODO: potentially interpolate trend? 
         seasonality = list(stl_result.seasonal[-(self.seasonality + 1) : -1])
         # print(record.entry.key, trend, seasonality)
 
@@ -200,6 +275,7 @@ def main(argv):
     if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
     results_file = f"{results_dir}/{name}.csv"
+    timestamp_file = f"{results_dir}/{name}_timestamps.csv"
     print("results file", results_file)
 
     # deploy_mode = "ray"
@@ -215,13 +291,13 @@ def main(argv):
 
     schedulers = {
         "fifo": FIFO(),
-        "lifo": LIFO(),
+        "lifo": STLLIFO(keys=range(1, 101, 1)),
     }
 
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
-        DataSource(data_dir),
+        DataSource(data_dir, timestamp_file),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
