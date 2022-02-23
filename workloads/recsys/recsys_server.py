@@ -1,5 +1,6 @@
 from ast import Global
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
+from ralf.v2.scheduler import LeastUpdate
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
 import pandas as pd
@@ -11,6 +12,7 @@ import os
 from absl import app, flags
 import wandb
 import ray
+import time
 
 FLAGS = flags.FLAGS
 
@@ -99,6 +101,7 @@ class GlobalTimestamp:
         self.ts += 1
     def get_ts(self):
         return self.ts
+        
 
 class DataSource(BaseTransform): 
     def __init__(self, file_path: str, ts: GlobalTimestamp) -> None:
@@ -115,9 +118,11 @@ class DataSource(BaseTransform):
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
         curr_timestamp = ray.get(self.ts.get_ts.remote())
         events = self.data[curr_timestamp]
+        
         #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
         if curr_timestamp == self.max_ts:
             raise StopIteration()
+        time.sleep(.1)
         self.ts.incr_ts.remote()
         return [
             Record(
@@ -154,19 +159,23 @@ class User(BaseTransform):
 
 class WriteFeatures(BaseTransform): 
     def __init__(self, file_path: str, timestamp: GlobalTimestamp):
-        df = pd.DataFrame({"user_id": [], "user_features": [], "timestamp": []})
         self.filename = file_path 
         self.ts = timestamp
+
+        df = pd.DataFrame({"user_id": [], "user_features": [], "timestamp": []})
         df.to_csv(self.filename, index=None)
+        self.file = None
+
+    @property
+    def _file(self):
+        if self.file is None:
+            self.file = open(self.filename, "a")
+        return self.file
 
     def on_event(self, record: Record): 
         curr_timestamp = ray.get(self.ts.get_ts.remote())
-        df = pd.DataFrame({'user_id': [record.entry.key], 'user_features': [list(record.entry.user_features)], 'timestamp': [curr_timestamp]})
-        temp_csv = df.to_csv(index=None, header=None)
-        #record_csv = f"{record.entry.key}, {list(record.entry.user_features)}, {curr_timestamp}\n"
-        #print(record_csv == temp_csv)
-        with open(self.filename, "a") as file:
-            file.write(temp_csv)
+        record_csv = f'{record.entry.key},"{list(record.entry.user_features)}",{curr_timestamp}\n'
+        self._file.write(record_csv)
         print("wrote", record.entry.key, record.entry.timestamp)
 
 def get_features(file_path):
@@ -178,7 +187,6 @@ def get_features(file_path):
 
 def main(argv):
     print("Running Recsys pipeline on ralf...")
-
 
     if FLAGS.source_file is None:
         # download data 
@@ -215,6 +223,7 @@ def main(argv):
     schedulers = {
         "fifo": FIFO(), 
         "lifo": LIFO(), 
+        "least": LeastUpdate(),
     }
 
     # create feature frames
@@ -252,7 +261,14 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
-        WriteFeatures(results_file, timestamp)
+        WriteFeatures(results_file, timestamp),
+        operator_config=OperatorConfig(
+            simpy_config=SimpyOperatorConfig(
+                shared_env=env, 
+                processing_time_s=0.2, 
+            ),         
+            ray_config=RayOperatorConfig(num_replicas=1)
+        )
     )
 
     app.deploy()
