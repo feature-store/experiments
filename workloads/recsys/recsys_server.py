@@ -9,15 +9,17 @@ from typing import List, Dict
 import simpy
 import os
 from absl import app, flags
-import wandb
 import ray
+
+# might need to do  export PYTHONPATH='.'
+from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
     "experiment",
     default=None, 
-    help="Experiment name",
+    help="Experiment name (corresponds to data directory)",
     required=True,
 )
 
@@ -35,26 +37,26 @@ flags.DEFINE_integer(
     required=False,
 )
 
-flags.DEFINE_string(
-    "source_file",
-    default=None,
-    help="Dataset file",
-    required=False,
-)
-
-flags.DEFINE_string(
-    "target_dir",
-    default="./results", 
-    help="Result target directory", 
-    required=False,
-)
-
-flags.DEFINE_string(
-    "features_dir",
-    default=None, 
-    help="Directory to read features from", 
-    required=True,
-)
+#flags.DEFINE_string(
+#    "source_file",
+#    default=None,
+#    help="Dataset file",
+#    required=False,
+#)
+#
+#flags.DEFINE_string(
+#    "target_dir",
+#    default="./results", 
+#    help="Result target directory", 
+#    required=False,
+#)
+#
+#flags.DEFINE_string(
+#    "features_dir",
+#    default=None, 
+#    help="Directory to read features from", 
+#    required=True,
+#)
 
 flags.DEFINE_float(
     "learning_rate",
@@ -67,6 +69,13 @@ flags.DEFINE_float(
     "user_feature_reg",
     default=.01,
     help="Regularization term for user features",
+    required=False,
+)
+
+flags.DEFINE_float(
+    "sleep",
+    default=.1,
+    help="How much to sleep between each timestamp", 
     required=False,
 )
 
@@ -157,6 +166,7 @@ class WriteFeatures(BaseTransform):
         df = pd.DataFrame({"user_id": [], "user_features": [], "timestamp": []})
         self.filename = file_path 
         self.ts = timestamp
+        print("WRITING TO", self.filename)
         df.to_csv(self.filename, index=None)
 
     def on_event(self, record: Record): 
@@ -179,27 +189,21 @@ def get_features(file_path):
 def main(argv):
     print("Running Recsys pipeline on ralf...")
 
+    data_dir = use_dataset(FLAGS.experiment, redownload=False)
+    results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
+    name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}"
+    print("dataset", data_dir)
 
-    if FLAGS.source_file is None:
-        # download data 
-        run = wandb.init(project="ralf-recsys", entity="ucb-ralf")
-        src_artifact = run.use_artifact(f"{FLAGS.experiment}:latest", type='dataset')
-        data_dir = src_artifact.download()
-        print(data_dir)
-    else: 
-        # use existing data dir
-        source_file = FLAGS.source_file
-
-    # create results file/directory
-    results_dir = f"{FLAGS.target_dir}/{FLAGS.experiment}"
-    if not os.path.isdir(results_dir): 
+    ## create results file/directory
+    if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
-    results_file = f"{results_dir}/results_workers_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}.csv"
+    results_file = f"{results_dir}/{name}.csv"
+    print("results file", results_file)
 
-    features_dir = FLAGS.features_dir
-
-    user_features = get_features(f"{features_dir}/user_features.csv")
-    movie_features = get_features(f"{features_dir}/movie_features.csv")
+    # read data
+    user_features = get_features(f"{data_dir}/user_features.csv")
+    movie_features = get_features(f"{data_dir}/movie_features.csv")
+    ratings_file = f"{data_dir}/ratings.csv"
 
     #deploy_mode = "ray"
     deploy_mode = "ray"
@@ -221,7 +225,7 @@ def main(argv):
     # TODO: benchmark to figure out better processing_time values for simulation
     timestamp = GlobalTimestamp.remote()
     movie_ff = app.source(
-        DataSource(source_file, timestamp),
+        DataSource(f"{data_dir}/ratings.csv", timestamp),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, 
@@ -260,13 +264,14 @@ def main(argv):
     if deploy_mode == "simpy": env.run(100)
     app.wait()
 
-    print("logging to wandb")
-    if FLAGS.source_file:
-        run = wandb.init(project="ralf-stl", entity="ucb-ralf")
-    target_artifact = wandb.Artifact(f"{FLAGS.experiment}-results", type='results')
-    target_artifact.add_dir(results_dir)
-    run.log_artifact(target_artifact)
+    #print("logging to wandb")
+    #if FLAGS.source_file:
+    #    run = wandb.init(project="ralf-stl", entity="ucb-ralf")
+    #target_artifact = wandb.Artifact(f"{FLAGS.experiment}-results", type='results')
+    #target_artifact.add_dir(results_dir)
+    #run.log_artifact(target_artifact)
     print("Completed run!")
+    log_results(name)
 
 
 if __name__ == "__main__":
