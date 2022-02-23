@@ -122,7 +122,7 @@ class DataSource(BaseTransform):
         #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
         if curr_timestamp == self.max_ts:
             raise StopIteration()
-        time.sleep(.1)
+        time.sleep(5)
         self.ts.incr_ts.remote()
         return [
             Record(
