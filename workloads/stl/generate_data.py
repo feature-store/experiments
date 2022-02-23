@@ -10,29 +10,9 @@ import configparser
 from tqdm import tqdm
 from statsmodels.tsa.seasonal import STL
 
-#import sys 
-#sys.path.insert(1, "../")
-#from util import upload_dataset
 from workloads.util import read_config, use_dataset, log_dataset
 
-import wandb
-
-
 FLAGS = flags.FLAGS
-
-#flags.DEFINE_string(
-#    "data_dir",
-#    default=None,
-#    help="Dataset directory",
-#    required=True,
-#)
-#
-#
-#flags.DEFINE_string(
-#    "dataset",
-#    default="A4",
-#    help="Yahoo dataset name",
-#)
 
 flags.DEFINE_integer(
     "num_keys",
@@ -87,7 +67,7 @@ flags.DEFINE_integer(
     help="Noise to add to generated time-series"
 )
 
-def extend_timeseries(source_key, target_key):
+def extend_timeseries(source_key, target_key, data_dir):
     # write key CSV
     # from https://github.com/feature-store/experiments/blob/simon-stl/stl/extend_yahoo_dataset.ipynb
 
@@ -98,7 +78,7 @@ def extend_timeseries(source_key, target_key):
 
     # TODO: actually extend the time-series 
 
-    source_df = pd.read_csv(os.path.join(FLAGS.data_dir, "yahoo", FLAGS.dataset, f"{source_key}.csv"))
+    source_df = pd.read_csv(os.path.join(data_dir, f"{source_key}.csv"))
 
     max_outlier_value, min_outlier_value = max(source_df['noise']), min(source_df['noise'])
     mean, stddev = statistics.mean(source_df['noise']), statistics.stdev(source_df['noise'])
@@ -190,11 +170,13 @@ def create_queries_df(keys, data_dir, start_index=0):
 
     key_col = []
     val_col = []
+    trend_col = []
     time_col = []
     for key in keys: 
         df = pd.read_csv(os.path.join(data_dir, f"{key}.csv"))
         interval = int(len(df.index) / num_queries_per_key)
         v = df[df.index % interval == 0].value.tolist()
+        tr = df[df.index % interval == 0].trend.tolist()
         t = df[df.index % interval == 0].timestamp_ms.tolist()
         assert len(v) == num_queries_per_key, f"Invalid length {len(v)}, {num_queries_per_key}, {len(df.index)}, interval {interval}"
         assert len(t) == num_queries_per_key 
@@ -237,7 +219,7 @@ def create_features_df(key, data_dir):
         else:
             stl = STL(window.tolist(), period=FLAGS.seasonality, robust=True).fit()
             trend.append(stl.trend[-1])
-            seasonality.append(stl.seasonal[-(FLAGS.seasonality + 1) : -1])
+            seasonality.append(list(stl.seasonal[-(FLAGS.seasonality + 1) : -1]))
 
     assert len(seasonality) == len(df.index)
     assert len(trend) == len(df.index)
@@ -256,24 +238,18 @@ def create_predictions_df(keys):
 
 def main(argv):
 
-    #run = wandb.init(project="ralf-stl", entity="ucb-ralf", job_type="dataset-creation")
-    source_dataset = use_dataset("yahoo/A4")
+    dataset = "yahoo/A4"
+    source_dataset = use_dataset(dataset)
     config = read_config() 
 
     # dataset configuration
-    #yahoo_dataset = FLAGS.dataset
+    yahoo_dataset = dataset.replace("/", "-")
     num_keys = FLAGS.num_keys
     time_interval_ms = FLAGS.time_interval_ms
     num_events = FLAGS.num_events
     num_queries = FLAGS.num_queries
 
-    ## configuration file
-    #config = configparser.ConfigParser()
-    #config.read("config.yml") 
-    #results_dir = config["directory"]["results_dir"]
-    #data_dir = os.path.join(config["directory"]["data_dir"], yahoo_dataset)
-
-    dataset_name = f"stl-{yahoo_dataset}-keys-{num_keys}-interval-{time_interval_ms}-events-{num_events}"
+    dataset_name = f"stl-{yahoo_dataset}-keys-{num_keys}-interval-{time_interval_ms}-events-{num_events}-queries-{num_queries}"
     dataset_dir = os.path.join(config["dataset_dir"] , dataset_name)
     print(dataset_name)
     dataset_config = {
@@ -287,11 +263,10 @@ def main(argv):
     
     # setup experiment directory
     print("creating", dataset_dir)
-    if not os.path.isdir(dataset_dir):
-        os.mkdir(dataset_dir)
-        os.mkdir(f"{dataset_dir}/extended_data")
-        os.mkdir(f"{dataset_dir}/data")
-        os.mkdir(f"{dataset_dir}/oracle_{FLAGS.window_size}")
+    os.makedirs(dataset_dir, exist_ok=True)
+    os.makedirs(f"{dataset_dir}/extended_data", exist_ok=True)
+    os.makedirs(f"{dataset_dir}/data", exist_ok=True)
+    os.makedirs(f"{dataset_dir}/oracle_{FLAGS.window_size}", exist_ok=True)
 
     open(f"{dataset_dir}/config.json", "w").write(json.dumps(dataset_config))
 
@@ -301,9 +276,9 @@ def main(argv):
     target_keys = range(1, num_keys + 1)
     source_keys = [i % yahoo_num_keys + 1 for i in target_keys]
 
-    num_workers = 32
+    num_workers = 100
     p = Pool(num_workers)
-    dfs = p.starmap(extend_timeseries, zip(source_keys, target_keys))
+    dfs = p.starmap(extend_timeseries, zip(source_keys, target_keys, [source_dataset]*len(target_keys)))
     p.close()
 
     for df, key in tqdm(zip(dfs, target_keys)): 
@@ -331,29 +306,14 @@ def main(argv):
     oracle_df = pd.concat(dfs).set_index(["key_id", "timestamp_ms"], drop=False)
     oracle_df.to_csv(f"{dataset_dir}/oracle_features_{FLAGS.window_size}.csv")
 
-    log_dataset(dataset_name)
 
-
-    #df.to_csv(os.path.join(data_dir, "oracle", f"features_{key}.csv"))
-
-
-    # TODO: Log dataset to W&B
-    
-    #with open(FLAGS.output_path, "w") as f:
-    #    json.dump(slide_size_config, f)
-
-    # increase length of time-series 
-
-    # duplicate keys 
-    
-    ## calculate optimal results
-    ##upload_dataset(dataset_name, os.path.basename(dataset_name))
-    #artifact = wandb.Artifact(dataset_name, type="dataset")
-    #artifact.add_dir(dataset_name)
-    #run.log_artifact(artifact)
-
-
-
+    while True: 
+        try:
+            log_dataset(dataset_name)
+            break
+        except Exception as e: 
+            print(e) 
+            time.sleep(5)
 
 
 if __name__ == "__main__":
