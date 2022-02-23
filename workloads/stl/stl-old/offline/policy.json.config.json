@@ -1,0 +1,14 @@
+{
+  "key_prio_policy": "fifo",
+  "key_load_shed_policy": "always_process",
+  "per_key_records_per_second": 1,
+  "num_keys": 1,
+  "total_runtime_s": 2000.0,
+  "model_runtime_s": 0.01,
+  "window_size": 672,
+  "slide_size": 0,
+  "source_data_path": null,
+  "output_path": "policy.json",
+  "per_key_slide_size_plan": null,
+  "num_mapper_replicas": 10
+}
