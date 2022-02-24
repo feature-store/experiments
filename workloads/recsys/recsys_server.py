@@ -1,5 +1,6 @@
 from ast import Global
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
+from ralf.v2.scheduler import LeastUpdate
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
 import pandas as pd
@@ -11,6 +12,7 @@ import simpy
 import os
 from absl import app, flags
 import ray
+import time
 
 # might need to do  export PYTHONPATH='.'
 from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
@@ -113,6 +115,7 @@ class GlobalTimestamp:
         self.ts += 1
     def get_ts(self):
         return self.ts
+        
 
 class DataSource(BaseTransform): 
     #def __init__(self, file_path: str, ts: GlobalTimestamp, sleep: int = 0) -> None:
@@ -132,6 +135,7 @@ class DataSource(BaseTransform):
         #curr_timestamp = await ray.get(self.ts.get_ts.remote())
         curr_timestamp = self.ts
         events = self.data[curr_timestamp]
+        
         #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
         if curr_timestamp == self.max_ts:
             raise StopIteration()
@@ -143,6 +147,7 @@ class DataSource(BaseTransform):
         time.sleep(self.sleep)
         for e in events: 
             print("sending user", e["user_id"], e["timestamp"])
+
         return [
             Record(
                 SourceValue(
@@ -180,7 +185,7 @@ class User(BaseTransform):
         updated_user_features = user_features + self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
         self.user_features[user_id] = updated_user_features
 
-        print("Updating user", user_id, record.entry.timestamp)
+        #print("Updating user", user_id, record.entry.timestamp)
 
         return Record(UserValue(user_id=user_id, user_features=updated_user_features.tolist(), timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time()))
 
@@ -242,6 +247,7 @@ def main(argv):
     schedulers = {
         "fifo": FIFO(), 
         "lifo": LIFO(), 
+        "least": LeastUpdate(),
     }
 
     # create feature frames
@@ -288,12 +294,6 @@ def main(argv):
     if deploy_mode == "simpy": env.run(100)
     app.wait()
 
-    #print("logging to wandb")
-    #if FLAGS.source_file:
-    #    run = wandb.init(project="ralf-stl", entity="ucb-ralf")
-    #target_artifact = wandb.Artifact(f"{FLAGS.experiment}-results", type='results')
-    #target_artifact.add_dir(results_dir)
-    #run.log_artifact(target_artifact)
     print("Completed run!")
     log_results(name)
 
