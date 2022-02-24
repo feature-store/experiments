@@ -153,47 +153,46 @@ class WriteFeatures(BaseTransform):
       
 
 
-def join_queries_features(queries_df, features_df): 
+def join_queries_features(queries_df, features_df, time_field="timestamp", key_field="key_id"): 
 
     # TODO: shard/parallleize by key 
 
     from tqdm import tqdm 
 
     ## assing timestamp 
-    features_df["timestamp"] = features_df["processing_time"]
-    start_time = features_df["timestamp"].min()
+    #features_df["timestamp"] = features_df["processing_time"]
+    #start_time = features_df["timestamp"].min()
     #queries_df = assigned_query_timestamps(queries_df, start_time)
 
-    queries_df = queries_df.sort_values(["key_id", "timestamp"])
-    features_df = features_df.sort_values(["key_id", "timestamp"])
+    queries_df = queries_df.sort_values([key_field, time_field])
+    features_df = features_df.sort_values([key_field, time_field])
 
     fi = 0
 
     rows = []
     for qi in tqdm(range(len(queries_df.index))):
 
-        key = queries_df.iloc[qi].key_id
-        ts = queries_df.iloc[qi].timestamp
+        key = queries_df.iloc[qi][key_field]
+        ts = queries_df.iloc[qi][time_field]
         #print(fi, qi, features_df.iloc[fi].key_id, key, features_df.iloc[fi].timestamp, ts)
 
-        while fi < len(features_df.index) and features_df.iloc[fi].key_id != key:
+        while fi < len(features_df.index) and features_df.iloc[fi][key_field] != key:
             fi += 1
 
-        while fi + 1 < len(features_df.index) and features_df.iloc[fi + 1].timestamp <= ts and features_df.iloc[fi + 1].key_id == key: 
+        while fi + 1 < len(features_df.index) and features_df.iloc[fi + 1][time_field] <= ts and features_df.iloc[fi + 1][key_field] == key: 
             fi += 1
 
         if fi >= len(features_df.index): break
 
-        if features_df.iloc[fi].timestamp > ts or features_df.iloc[fi].key_id != key: 
+        if features_df.iloc[fi][time_field] > ts or features_df.iloc[fi][key_field] != key: 
             continue
 
-        assert features_df.iloc[fi].timestamp <= ts and features_df.iloc[fi].key_id == key, f"Mismatch {fi}/{qi}: {features_df.iloc[fi].timestamp}/{ts}, {features_df.iloc[fi].key_id}/{key}"
+        assert features_df.iloc[fi][time_field] <= ts and features_df.iloc[fi][key_field] == key, f"Mismatch {fi}/{qi}: {features_df.iloc[fi].timestamp}/{ts}, {features_df.iloc[fi][key_field]}/{key}"
 
         row = features_df.iloc[fi].to_dict()
         row["query_id"] = int(queries_df.iloc[qi].query_id)
-        row["query_key_id"] = queries_df.iloc[qi].key_id
-        row["query_timestamp_ms"] = queries_df.iloc[qi].timestamp_ms
-        row["query_timestamp"] = queries_df.iloc[qi].timestamp
+        row[f"query_{key_field}"] = queries_df.iloc[qi][key_field]
+        row["query_timestamp"] = queries_df.iloc[qi][time_field]
         rows.append(row)
 
     return pd.DataFrame(rows)
