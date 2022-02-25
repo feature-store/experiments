@@ -1,5 +1,5 @@
 from ast import Global
-from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
+from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
 from ralf.v2.scheduler import LeastUpdate
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
@@ -82,9 +82,72 @@ flags.DEFINE_float(
     required=False,
 )
 
+
+class LeastUpdates(BaseScheduler):
+    def __init__(self, size: int) -> None:
+        self.waker: Optional[threading.Event] = None
+        self.stop_iteration = None
+        self.size = size
+
+        #self.queue = {key: [] for key in keys}
+        #self.keys = keys
+        self.queue: List[Record] = []
+
+    def push_event(self, record: Record):
+        self.wake_waiter_if_needed()
+        self.queue.append(record)
+        if record.is_stop_iteration(): # stop iteration
+            print("GOT STOP")
+            self.stop_iteration = record
+        if len(self.queue) > self.size: 
+            print(f"Queue too large {self.size}, {len(self.queue)}")
+            self.queue = self.queue[len(self.queue) - int(self.size/2):]
+            
+    def pop_event(self) -> Record:
+        if self.stop_iteration: # return stop iteration record
+            print("POP STOP")
+            return self.stop_iteration
+        if len(self.queue) == 0:
+            return Record.make_wait_event(self.new_waker())
+
+        return self.queue.pop(0)
+
+
+class FIFOSize(BaseScheduler):
+    def __init__(self, size: int) -> None:
+        self.waker: Optional[threading.Event] = None
+        self.stop_iteration = None
+        self.size = size
+
+        #self.queue = {key: [] for key in keys}
+        #self.keys = keys
+        self.queue: List[Record] = []
+
+    def push_event(self, record: Record):
+        self.wake_waiter_if_needed()
+        self.queue.append(record)
+        if record.is_stop_iteration(): # stop iteration
+            print("GOT STOP")
+            self.stop_iteration = record
+        if len(self.queue) > self.size: 
+            print(f"Queue too large {self.size}, {len(self.queue)}")
+            self.queue = self.queue[len(self.queue) - int(self.size/2):]
+            
+    def pop_event(self) -> Record:
+        if self.stop_iteration: # return stop iteration record
+            print("POP STOP")
+            return self.stop_iteration
+        if len(self.queue) == 0:
+            return Record.make_wait_event(self.new_waker())
+
+        return self.queue.pop(0)
+
+
+
+
 @dataclass 
 class SourceValue: 
-    key: int
+    movie_id: int
     user_id: int
     rating: int
     timestamp: int
@@ -106,6 +169,7 @@ class UserValue:
     timestamp: int
     ingest_time: float
     processing_time: float
+    runtime: float
 
 @ray.remote
 class GlobalTimestamp:
@@ -145,13 +209,10 @@ class DataSource(BaseTransform):
         if self.ts % 100 == 0: 
             print("sending", self.ts, self.max_ts)
         time.sleep(self.sleep)
-        for e in events: 
-            print("sending user", e["user_id"], e["timestamp"])
-
         return [
             Record(
                 SourceValue(
-                    key=e["movie_id"], 
+                    movie_id=e["movie_id"], 
                     user_id=e["user_id"], 
                     timestamp=e["timestamp"], 
                     rating=e["rating"],
@@ -160,34 +221,39 @@ class DataSource(BaseTransform):
             ) for e in events
         ]
 
-class Movie(BaseTransform):
-    def __init__(self, movie_features: Dict) -> None:
-        self.movie_features = movie_features
-
-    def on_event(self, record: Record):
-        movie_id = record.entry.key
-        movie_features = self.movie_features[movie_id]
-        return Record(MovieValue(key=movie_id, movie_features=movie_features, user_id=record.entry.user_id, rating=record.entry.rating, timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time))
+#class Movie(BaseTransform):
+#    def __init__(self, movie_features: Dict) -> None:
+#        self.movie_features = movie_features
+#
+#    def on_event(self, record: Record):
+#        movie_id = record.entry.key
+#        movie_features = self.movie_features[movie_id]
+#        return Record(MovieValue(key=movie_id, movie_features=movie_features, user_id=record.entry.user_id, rating=record.entry.rating, timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time))
 
 class User(BaseTransform):
-    def __init__(self, user_features: Dict, learning_rate: float, user_feature_reg: float) -> None:
+    def __init__(self, movie_features: Dict, user_features: Dict, learning_rate: float, user_feature_reg: float) -> None:
+        self.movie_features = movie_features
         self.user_features = user_features
         self.learning_rate = learning_rate
         self.user_feature_reg = user_feature_reg
 
     def on_event(self, record: Record):
         user_id = record.entry.user_id
+        movie_id = record.entry.movie_id
         user_features = self.user_features[user_id]
-        movie_features = record.entry.movie_features
-        
+        movie_features = self.movie_features[movie_id]
+        #movie_features = record.entry.movie_features
+       
+        st = time.time()
         prediction = user_features.dot(movie_features.T)
         error = record.entry.rating - prediction
         updated_user_features = user_features + self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
         self.user_features[user_id] = updated_user_features
 
         #print("Updating user", user_id, record.entry.timestamp)
+        runtime = time.time() - st
 
-        return Record(UserValue(user_id=user_id, user_features=updated_user_features.tolist(), timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time()))
+        return Record(UserValue(user_id=user_id, user_features=updated_user_features.tolist(), timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time(), runtime=runtime))
 
 #class WriteFeatures(BaseTransform): 
 #    def __init__(self, file_path: str, timestamp: GlobalTimestamp):
@@ -245,7 +311,8 @@ def main(argv):
         env = None
 
     schedulers = {
-        "fifo": FIFO(), 
+        "fifo-100": FIFOSize(100), 
+        "fifo-1000": FIFOSize(1000), 
         "lifo": LIFO(), 
         "least": LeastUpdate(),
     }
@@ -264,19 +331,20 @@ def main(argv):
             ),         
             ray_config=RayOperatorConfig(num_replicas=1)
     )
+    #).transform(
+    #    Movie(movie_features), 
+    #    scheduler=FIFO(), 
+    #    operator_config=OperatorConfig(
+    #        simpy_config=SimpyOperatorConfig(
+    #            shared_env=env, 
+    #            processing_time_s=0.01, 
+    #        ),         
+    #        ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
+    #    )
+    #)
+    #user_ff = movie_ff.transform(
     ).transform(
-        Movie(movie_features), 
-        scheduler=FIFO(), 
-        operator_config=OperatorConfig(
-            simpy_config=SimpyOperatorConfig(
-                shared_env=env, 
-                processing_time_s=0.01, 
-            ),         
-            ray_config=RayOperatorConfig(num_replicas=1)
-        )
-    )
-    user_ff = movie_ff.transform(
-        User(user_features, FLAGS.learning_rate, FLAGS.user_feature_reg),
+        User(movie_features, user_features, FLAGS.learning_rate, FLAGS.user_feature_reg),
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
@@ -286,7 +354,7 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
-        WriteFeatures(results_file, ["user_id", "user_features", "ingest_time", "timestamp", "processing_time"])
+        WriteFeatures(results_file, ["user_id", "user_features", "ingest_time", "timestamp", "processing_time", "runtime"])
     )
 
     app.deploy()
@@ -300,4 +368,4 @@ def main(argv):
 
 if __name__ == "__main__":
     app.run(main)
-
+##
