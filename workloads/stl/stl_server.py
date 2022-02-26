@@ -1,7 +1,7 @@
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 import os
 import time
 from collections import defaultdict
@@ -11,8 +11,18 @@ from statsmodels.tsa.seasonal import STL
 from absl import app, flags
 import wandb
 
+from ralf.v2.utils import get_logger
+
 # might need to do  export PYTHONPATH='.'
-from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
+from workloads.util import (
+    read_config,
+    use_dataset,
+    log_dataset,
+    log_results,
+    WriteFeatures,
+)
+
+logger = get_logger()
 
 FLAGS = flags.FLAGS
 
@@ -98,39 +108,38 @@ class TimeSeriesValue:
 
 class DataSource(BaseTransform):
     def __init__(self, data_dir: str) -> None:
+        path = f"{data_dir}/events.csv"
+        events_df = pd.read_csv(path)
+        logger.msg(f"read data from path {path}")
 
-        events_df = pd.read_csv(f"{data_dir}/events.csv")
+        # TODO(simon): remove this, used by debugging only
+        # events_df = events_df[events_df["key_id"] == 1]
 
-        self.ts = 0
+        self.ts = -5
         self.data = events_df
         self.last_send_time = -1
         self.total = len(events_df.index)
 
         self.ts_events = dict(tuple(events_df.groupby("timestamp_ms")))
-        print(self.ts_events.keys())
+        # print(self.ts_events.keys())
         self.max_ts = events_df.timestamp_ms.max()
 
-    def on_event(self, _: Record) -> List[Record[SourceValue]]:
+    def on_event(self, _: Record) -> Optional[List[Record[SourceValue]]]:
+        self.ts += 5
 
-        # TODO: fix this - very slow
-        #events = self.data[self.data["timestamp_ms"] == self.ts].to_dict("records")
-
-        #num_remaining = len(self.data[self.data["timestamp_ms"] >= self.ts].index)
-        #if num_remaining == 0:
-        if self.ts >= self.max_ts: 
+        if self.ts > self.max_ts:
             raise StopIteration()
-        else: 
-            #print(f"Completed {num_remaining} / {self.total} ({(self.total - num_remaining)*100/self.total}%)")
-            events = []
-            if self.ts in self.ts_events: 
-                events = self.ts_events[self.ts]
-                print(events)
 
+        if self.ts not in self.ts_events:
+            # TODO(simon): source will immediately poll next, should we sleep here?
+            # TODO(simon): onsider back pressure
+            logger.msg(f"Skipping ts {self.ts} because not in self.ts_events")
+            return None
 
+        events = self.ts_events[self.ts]
+
+        # TODO(simon): make sure we no longer need this with event_metrics
         ingest_time = time.time()
-        #if len(events) > 0:
-        #    print("sending events", self.ts, len(events), "remaining", num_remaining)
-        self.ts += 1
         return [
             Record(
                 SourceValue(
@@ -138,9 +147,10 @@ class DataSource(BaseTransform):
                     value=e["value"],
                     timestamp=e["timestamp_ms"],
                     ingest_time=ingest_time,
-                )
+                ),
+                shard_key=str(e["key_id"]),
             )
-            for e in events
+            for _, e in events.iterrows()
         ]
 
 
@@ -170,7 +180,8 @@ class Window(BaseTransform):
                     value=window,
                     timestamp=record.entry.timestamp,
                     ingest_time=record.entry.ingest_time,
-                )
+                ),
+                shard_key=str(record.entry.key),
             )
 
 
@@ -183,7 +194,7 @@ class STLFit(BaseTransform):
         stl_result = STL(record.entry.value, period=self.seasonality, robust=True).fit()
         # print(time.time() - st, st)
         trend = list(stl_result.trend)
-        # TODO: potentially interpolate trend? 
+        # TODO: potentially interpolate trend?
         seasonality = list(stl_result.seasonal[-(self.seasonality + 1) : -1])
         # print(record.entry.key, trend, seasonality)
 
@@ -198,6 +209,7 @@ class STLFit(BaseTransform):
                 runtime=time.time() - st,
             )
         )
+
 
 def main(argv):
     print("Running STL pipeline on ralf...")
@@ -256,13 +268,24 @@ def main(argv):
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
-                shared_env=env, 
-                processing_time_s=0.2, 
-            ),         
-            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
-        )
+                shared_env=env,
+                processing_time_s=0.2,
+            ),
+            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers),
+        ),
     ).transform(
-        WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
+        WriteFeatures(
+            results_file,
+            [
+                "key_id",
+                "trend",
+                "seasonality",
+                "timestamp_ms",
+                "processing_time",
+                "runtime",
+                "ingest_time",
+            ],
+        )
     )
 
     app.deploy()

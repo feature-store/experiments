@@ -1,9 +1,10 @@
 export NUMEXPR_MAX_THREADS=128
+export PYTHONPATH='.'
 
 for slide in 672 384 192 96 48 24 12
 do
     for workers in 8 4 2 1
-    do 
+    do
         for policy in "lifo" "fifo"
         do
             python workloads/stl/stl_server.py \
@@ -12,6 +13,9 @@ do
                 --window_size 672 \
                 --slide_size ${slide}\
                 --workers ${workers}
+            break
         done
+        break
     done
+    break
 done
