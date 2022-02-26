@@ -83,7 +83,7 @@ flags.DEFINE_float(
 )
 
 
-class LeastUpdates(BaseScheduler):
+class LeastUpdated(BaseScheduler):
     def __init__(self, size: int) -> None:
         self.waker: Optional[threading.Event] = None
         self.stop_iteration = None
@@ -91,17 +91,18 @@ class LeastUpdates(BaseScheduler):
 
         #self.queue = {key: [] for key in keys}
         #self.keys = keys
-        self.queue: List[Record] = []
+        self.queue = {}
 
     def push_event(self, record: Record):
         self.wake_waiter_if_needed()
-        self.queue.append(record)
         if record.is_stop_iteration(): # stop iteration
             print("GOT STOP")
             self.stop_iteration = record
-        if len(self.queue) > self.size: 
-            print(f"Queue too large {self.size}, {len(self.queue)}")
-            self.queue = self.queue[len(self.queue) - int(self.size/2):]
+
+        if record.user_id in self.queue: 
+            self.queue[record.user_id].append(record)
+        else: 
+            self.queue[record.user_id] = [record]
             
     def pop_event(self) -> Record:
         if self.stop_iteration: # return stop iteration record
@@ -119,8 +120,6 @@ class FIFOSize(BaseScheduler):
         self.stop_iteration = None
         self.size = size
 
-        #self.queue = {key: [] for key in keys}
-        #self.keys = keys
         self.queue: List[Record] = []
 
     def push_event(self, record: Record):
@@ -134,6 +133,7 @@ class FIFOSize(BaseScheduler):
             self.queue = self.queue[len(self.queue) - int(self.size/2):]
             
     def pop_event(self) -> Record:
+        print(len(self.queue))
         if self.stop_iteration: # return stop iteration record
             print("POP STOP")
             return self.stop_iteration
@@ -236,6 +236,7 @@ class User(BaseTransform):
         self.user_features = user_features
         self.learning_rate = learning_rate
         self.user_feature_reg = user_feature_reg
+        self.num_updates = 0
 
     def on_event(self, record: Record):
         user_id = record.entry.user_id
@@ -245,6 +246,12 @@ class User(BaseTransform):
         #movie_features = record.entry.movie_features
        
         st = time.time()
+
+
+        Users[i] = np.linalg.solve(
+                np.dot(movie_matrix, np.dot(np.diag(Ri), movie_matrix.T)) + self.user_feature_reg * np.eye(len(user_features)),
+                np.dot(Items, np.dot(np.diag(Ri), A[i].T))
+        ).T
         prediction = user_features.dot(movie_features.T)
         error = record.entry.rating - prediction
         updated_user_features = user_features + self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
@@ -252,6 +259,10 @@ class User(BaseTransform):
 
         #print("Updating user", user_id, record.entry.timestamp)
         runtime = time.time() - st
+
+        if self.num_updates % 100 == 0:
+            print("Num updates", self.num_updates)
+        self.num_updates += 1
 
         return Record(UserValue(user_id=user_id, user_features=updated_user_features.tolist(), timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time(), runtime=runtime))
 
