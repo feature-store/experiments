@@ -196,12 +196,13 @@ class DataSource(BaseTransform):
         time.sleep(0.001)
         return [
             Record(
-                SourceValue(
+                entry=SourceValue(
                     key=e["key_id"],
                     value=e["value"],
                     timestamp=e["timestamp_ms"],
                     ingest_time=ingest_time,
-                )
+                ), 
+                shard_key=str(e["key_id"])
             )
             for e in events
         ]
@@ -228,12 +229,13 @@ class Window(BaseTransform):
             # return window record
             # print("window", record.entry.key, window)
             return Record(
-                WindowValue(
+                entry=WindowValue(
                     key=record.entry.key,
                     value=window,
                     timestamp=record.entry.timestamp,
                     ingest_time=record.entry.ingest_time,
-                )
+                ), 
+                shard_key=str(record.entry.key)
             )
 
 
@@ -251,7 +253,7 @@ class STLFit(BaseTransform):
         # print(record.entry.key, trend, seasonality)
 
         return Record(
-            TimeSeriesValue(
+            entry=TimeSeriesValue(
                 key_id=record.entry.key,
                 trend=trend,
                 seasonality=seasonality,
@@ -259,7 +261,8 @@ class STLFit(BaseTransform):
                 ingest_time=record.entry.ingest_time,
                 processing_time=time.time(),
                 runtime=time.time() - st,
-            )
+            ),
+            shard_key=str(record.entry.key)
         )
 
 def main(argv):
