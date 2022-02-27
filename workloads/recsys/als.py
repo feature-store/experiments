@@ -1,5 +1,6 @@
 __author__ = 'paulthompson'
 import pickle
+import torch
 
 import pandas as pd, numpy as np, matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -57,7 +58,7 @@ def getInitialMatrix():
 
     return A, R
 
-def runALS(A, R, n_factors, n_iterations, lambda_):
+def runALS(A, R, n_factors, n_iterations, lambda_, user_matrix=None, movie_matrix=None, users=None):
     '''
     Runs Alternating Least Squares algorithm in order to calculate matrix.
     :param A: User-Item Matrix with ratings
@@ -71,42 +72,74 @@ def runALS(A, R, n_factors, n_iterations, lambda_):
     #lambda_ = 0.1; n_factors = 3; 
     n, m = A.shape
     #n_iterations = 20
-    Users = 5 * np.random.rand(n, n_factors)
-    Items = 5 * np.random.rand(n_factors, m)
+    if user_matrix is None:
+        Users = 5 * np.random.rand(n, n_factors)
+    else: 
+        Users = user_matrix
+
+    if movie_matrix is None:
+        Items = 5 * np.random.rand(n_factors, m)
+    else: 
+        Items = movie_matrix.T
 
     def get_error(A, Users, Items, R):
         # This calculates the MSE of nonzero elements
-        print(np.dot(Users, Items))
-        return np.sum((R * (A - np.dot(Users, Items))) ** 2) / np.sum(R)
+        #print(np.dot(Users, Items))
+        #return np.sum((R * (A - np.dot(Users, Items))) ** 2) / np.sum(R)
+        return torch.sum((R * (A - torch.mm(Users, Items))) ** 2) / torch.sum(R)
+
+
+    device = torch.device('cuda')
+    Users = torch.tensor(Users).to('cuda')
+    Items = torch.tensor(Items).to('cuda')
+    A = torch.tensor(A).to('cuda')
+    R = torch.tensor(R).to('cuda')
+    eye = torch.eye(n_factors).cuda()
+    lambda_ = torch.tensor(lambda_).to('cuda')
+    n_factors = torch.tensor(n_factors).to('cuda')
 
     MSE_List = []
 
     print("Starting Iterations")
     for iter in range(n_iterations):
         for i, Ri in enumerate(R):
-            Users[i] = np.linalg.solve(np.dot(Items, np.dot(np.diag(Ri), Items.T)) + lambda_ * np.eye(n_factors),
-                                       np.dot(Items, np.dot(np.diag(Ri), A[i].T))).T
-        print("Error after solving for User Matrix:", get_error(A, Users, Items, R))
+            if users is not None and i not in users: 
+                continue 
+            #print("updating user", i)
+            #Users[i] = np.linalg.solve(np.dot(Items, np.dot(np.diag(Ri), Items.T)) + lambda_ * np.eye(n_factors), np.dot(Items, np.dot(np.diag(Ri), A[i].T))).T
+            mat_a = torch.mm(Items, torch.mm(torch.diag(Ri), Items.T)) + lambda_* eye 
+            mat_b = Items @ (torch.diag(Ri) @ A[i].T)
+            #print("a", mat_a.shape, np.dot(Items.cpu(), np.dot(np.diag(Ri.cpu()), Items.cpu().T)).shape)
+            #print("b", mat_b.shape, np.dot(Items.cpu(), np.dot(np.diag(Ri.cpu()), A[i].cpu().T)).shape)
+            Users[i] = torch.linalg.solve(mat_a, mat_b).T
+        #print("Error after solving for User Matrix:", get_error(A, Users, Items, R))
 
         for j, Rj in enumerate(R.T):
-            Items[:,j] = np.linalg.solve(np.dot(Users.T, np.dot(np.diag(Rj), Users)) + lambda_ * np.eye(n_factors),
-                                     np.dot(Users.T, np.dot(np.diag(Rj), A[:, j])))
+            #Items[:,j] = np.linalg.solve(np.dot(Users.T, np.dot(np.diag(Rj), Users)) + lambda_ * np.eye(n_factors), np.dot(Users.T, np.dot(np.diag(Rj), A[:, j])))
+            Items[:,j] = torch.linalg.solve(
+                torch.mm(Users.T, torch.mm(torch.diag(Rj), Users)) + lambda_ * eye,
+                Users.T @ (torch.diag(Rj) @ A[:, j])
+            )
         print("Error after solving for Item Matrix:", get_error(A, Users, Items, R))
 
         MSE_List.append(get_error(A, Users, Items, R))
         print('%sth iteration is complete...' % iter)
-        pickle.dump(Users, open("trained_users.pkl", "wb"))
-        pickle.dump(Items, open("trained_items.pkl", "wb"))
 
     print(MSE_List)
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    plt.plot(range(1, len(MSE_List) + 1), MSE_List); plt.ylabel('Error'); plt.xlabel('Iteration')
-    plt.title('Python Implementation MSE by Iteration \n with %d users and %d movies' % A.shape);
-    plt.savefig('Python MSE Graph.pdf', format='pdf')
-    plt.show()
+    return Users.cpu().detach().numpy(), Items.T.cpu().detach().numpy()
+    #fig = plt.figure()
+    #ax = fig.add_subplot(111)
+    #plt.plot(range(1, len(MSE_List) + 1), MSE_List); plt.ylabel('Error'); plt.xlabel('Iteration')
+    #plt.title('Python Implementation MSE by Iteration \n with %d users and %d movies' % A.shape);
+    #plt.savefig('Python MSE Graph.pdf', format='pdf')
+    #plt.show()
 
 
 if __name__ == '__main__':
     A, R = getInitialMatrix()
-    runALS(A, R, n_factors = 10, n_iterations = 20, lambda_ = .1)
+    Users, Items = runALS(A, R, n_factors = 10, n_iterations = 20, lambda_ = .1)
+
+    pickle.dump(Users, open("trained_users.pkl", "wb")) 
+    pickle.dump(Items, open("trained_items.pkl", "wb"))
+
+

@@ -1,4 +1,6 @@
 from ast import Global
+import json
+import pickle
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
 from ralf.v2.scheduler import LeastUpdate
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
@@ -30,6 +32,13 @@ flags.DEFINE_string(
     "scheduler",
     default=None, 
     help="Scheduling policy for STL operator", 
+    required=True,
+)
+
+flags.DEFINE_string(
+    "update",
+    default=None, 
+    help="Update type", 
     required=True,
 )
 
@@ -185,12 +194,13 @@ class DataSource(BaseTransform):
     #def __init__(self, file_path: str, ts: GlobalTimestamp, sleep: int = 0) -> None:
     def __init__(self, file_path: str, sleep: int = 0) -> None:
         events_df = pd.read_csv(file_path)
+        events_df.columns = ['user_id', 'movie_id', 'rating', 'timestamp']
         data = dict()
         for timestamp in events_df["timestamp"].unique():
             curr_timestep = events_df[events_df["timestamp"] == timestamp].to_dict('records')
             data[timestamp] = curr_timestep
         self.max_ts = max(list(data.keys()))
-        self.ts = 0
+        self.ts = events_df["timestamp"].min()
         self.data = data
         self.sleep = sleep
         self.last_send_time = -1
@@ -198,7 +208,10 @@ class DataSource(BaseTransform):
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
         #curr_timestamp = await ray.get(self.ts.get_ts.remote())
         curr_timestamp = self.ts
-        events = self.data[curr_timestamp]
+        if self.ts in self.data: 
+            events = self.data[self.ts]
+        else: 
+            events = []
         
         #num_remaining = len(self.data[self.data["timestamp"] >= self.ts].index)
         if curr_timestamp == self.max_ts:
@@ -230,41 +243,152 @@ class DataSource(BaseTransform):
 #        movie_features = self.movie_features[movie_id]
 #        return Record(MovieValue(key=movie_id, movie_features=movie_features, user_id=record.entry.user_id, rating=record.entry.rating, timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time))
 
-class User(BaseTransform):
-    def __init__(self, movie_features: Dict, user_features: Dict, learning_rate: float, user_feature_reg: float) -> None:
-        self.movie_features = movie_features
-        self.user_features = user_features
-        self.learning_rate = learning_rate
-        self.user_feature_reg = user_feature_reg
+class UserSGD(BaseTransform):
+    """
+    Maintain user embeddings with SGD updates
+    """
+
+    def __init__(self, data_dir: str, learning_rate: float, user_feature_reg: float) -> None:
+        print(f"{data_dir}/movie_to_index.json")
+        self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
+        self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
+        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb"))
+        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb"))
+
+        self.lr = learning_rate
+        self.reg = user_feature_reg
         self.num_updates = 0
 
     def on_event(self, record: Record):
         user_id = record.entry.user_id
         movie_id = record.entry.movie_id
-        user_features = self.user_features[user_id]
-        movie_features = self.movie_features[movie_id]
-        #movie_features = record.entry.movie_features
-       
+        rating = record.entry.rating
         st = time.time()
-
-
-        Users[i] = np.linalg.solve(
-                np.dot(movie_matrix, np.dot(np.diag(Ri), movie_matrix.T)) + self.user_feature_reg * np.eye(len(user_features)),
-                np.dot(Items, np.dot(np.diag(Ri), A[i].T))
-        ).T
-        prediction = user_features.dot(movie_features.T)
-        error = record.entry.rating - prediction
-        updated_user_features = user_features + self.learning_rate * (error * movie_features - self.user_feature_reg * user_features)
-        self.user_features[user_id] = updated_user_features
-
-        #print("Updating user", user_id, record.entry.timestamp)
+        ui = self.user_to_index[int(user_id)]
+        mi = self.movie_to_index[int(movie_id)]
+        user_features = self.user_matrix[ui]
+        prediction = user_features.dot(self.movie_matrix[mi].T)
+        error = rating - prediction
+        
+        # update user matrix
+        self.user_matrix[ui] = user_features + self.lr * (error * self.movie_matrix[mi] - self.reg * user_features)
         runtime = time.time() - st
 
         if self.num_updates % 100 == 0:
             print("Num updates", self.num_updates)
         self.num_updates += 1
 
-        return Record(UserValue(user_id=user_id, user_features=updated_user_features.tolist(), timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time, processing_time=time.time(), runtime=runtime))
+        return Record(
+            UserValue(
+                user_id=user_id, 
+                user_features=self.user_matrix[ui].tolist(), 
+                timestamp=record.entry.timestamp, 
+                ingest_time=record.entry.ingest_time, 
+                processing_time=time.time(), 
+                runtime=runtime
+            )
+        )
+
+class UserALSRow(BaseTransform): 
+    """
+    Maintain user embeddings by re-solving for user vector
+    """
+    def __init__(self, data_dir: str, user_feature_reg: int = 10):
+        self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
+        self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
+        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb"))
+        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb"))
+        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb"))
+        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb"))
+        self.num_updates = 0 
+
+    def on_event(self, record: Record):
+        ui = record.entry.user_id
+        mi = record.entry.movie_id
+        st = time.time()
+
+        # update matrix
+        self.A[ui][mi] = row["rating"]
+        self.R[ui][mi] = 1
+
+        Ri = self.R[ui] 
+        user_features = self.user_matrix[ui]
+        n_factors = len(user_features)
+
+        # calculate new user vector
+        self.user_matrix[ui] = np.linalg.solve(
+            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.movie_matrix)) + self.user_feature_reg * np.eye(n_factors),
+            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.A[ui].T))
+        ).T
+
+        runtime = time.time() - st
+
+        if self.num_updates % 100 == 0:
+            print("Num updates", self.num_updates)
+        self.num_updates += 1
+
+        return Record(
+            UserValue(
+                user_id=user_id, 
+                user_features=self.user_matrix[ui].tolist(), 
+                timestamp=record.entry.timestamp, 
+                ingest_time=record.entry.ingest_time, 
+                processing_time=time.time(), 
+                runtime=runtime
+            )
+        )
+
+class UserALS(BaseTransform): 
+    """
+    Maintain user embeddings by re-solving both user/movie matrix
+    """
+    def __init__(self, data_dir: str, user_feature_reg: int = 0.1):
+        self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
+        self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
+        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb"))
+        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb"))
+        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb"))
+        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb"))
+        self.num_updates = 0 
+
+    def on_event(self, record: Record):
+        ui = record.entry.user_id
+        mi = record.entry.movie_id
+        st = time.time()
+
+        # update matrix
+        self.A[ui][mi] = row["rating"]
+        self.R[ui][mi] = 1
+
+        Ri = self.R[ui] 
+        user_features = user_matrix[ui]
+        n_factors = len(user_features)
+
+        # calculate new user vector
+        self.user_matrix[ui] = np.linalg.solve(
+            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.movie_matrix)) + self.user_feature_reg * np.eye(n_factors),
+            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.A[ui].T))
+        ).T
+
+        runtime = time.time() - st
+
+        if self.num_updates % 100 == 0:
+            print("Num updates", self.num_updates)
+        self.num_updates += 1
+
+        return Record(
+            UserValue(
+                user_id=user_id, 
+                user_features=self.user_matrix[ui].tolist(), 
+                timestamp=record.entry.timestamp, 
+                ingest_time=record.entry.ingest_time, 
+                processing_time=time.time(), 
+                runtime=runtime
+            )
+        )
+
+
+
 
 #class WriteFeatures(BaseTransform): 
 #    def __init__(self, file_path: str, timestamp: GlobalTimestamp):
@@ -296,7 +420,7 @@ def main(argv):
 
     data_dir = use_dataset(FLAGS.experiment, redownload=False)
     results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
-    name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}_sleep_{FLAGS.sleep}"
+    name = f"results_workers_{FLAGS.update}_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}_sleep_{FLAGS.sleep}"
     print("dataset", data_dir)
 
     ## create results file/directory
@@ -306,8 +430,6 @@ def main(argv):
     print("results file", results_file)
 
     # read data
-    user_features = get_features(f"{data_dir}/user_features.csv")
-    movie_features = get_features(f"{data_dir}/movie_features.csv")
     ratings_file = f"{data_dir}/ratings.csv"
 
     #deploy_mode = "ray"
@@ -326,6 +448,12 @@ def main(argv):
         "fifo-1000": FIFOSize(1000), 
         "lifo": LIFO(), 
         "least": LeastUpdate(),
+    }
+
+    operators = {
+        "sgd": UserSGD(data_dir, FLAGS.learning_rate, FLAGS.user_feature_reg),
+        "user": UserALSRow(data_dir), 
+        "als": None, 
     }
 
     # create feature frames
@@ -355,7 +483,8 @@ def main(argv):
     #)
     #user_ff = movie_ff.transform(
     ).transform(
-        User(movie_features, user_features, FLAGS.learning_rate, FLAGS.user_feature_reg),
+        #User(movie_features, user_features, FLAGS.learning_rate, FLAGS.user_feature_reg),
+        operators[FLAGS.update],
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
