@@ -1,4 +1,5 @@
 from ast import Global
+import random
 from collections import defaultdict
 import json
 import pickle
@@ -216,11 +217,28 @@ class KeyFIFO(BaseScheduler):
 
         return events
 
+class Random(KeyFIFO):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def choose_key(self): 
+
+        keys = []
+        for key in self.num_pending.keys():
+            if self.num_pending[key] == 0: continue
+            keys.append(key)
+        if len(keys) == 0: return None
+
+        return random.choice(keys)
+
 
 
 class MLFIFO(KeyFIFO):
 
     def __init__(self, *args, **kwargs):
+        dataset_dir = "/data/wooders/ralf-vldb//datasets/ml-latest-small"
+        self.model = pickle.load(open(f"{dataset_dir}/random_forest_model", "rb"))
         super().__init__(*args, **kwargs)
 
     def choose_key(self): 
@@ -245,7 +263,10 @@ class MLFIFO(KeyFIFO):
 
             # "ML" function
             # TODO: replace with actual learned model
-            score = s[keys.index(key)] + 10 * p[keys.index(key)]
+            i = keys.index(key) 
+            score = self.model.predict([[s[i], u[i], p[i]]])[0]
+            print("score", [s[i], p[i], u[i]], "->", score)
+            #score = s[keys.index(key)] + 10 * p[keys.index(key)]
 
             if score > max_score:
                 max_score = score
@@ -291,7 +312,7 @@ class GlobalTimestamp:
 
 class DataSource(BaseTransform): 
     #def __init__(self, file_path: str, ts: GlobalTimestamp, sleep: int = 0) -> None:
-    def __init__(self, file_path: str, sleep: int = 0) -> None:
+    def __init__(self, file_path: str, sleep: int = 0, max_ts = None) -> None:
         events_df = pd.read_csv(file_path)
         print(events_df.columns)
         events_df = events_df.iloc[: , 1:]
@@ -302,6 +323,7 @@ class DataSource(BaseTransform):
             curr_timestep = events_df[events_df["timestamp"] == timestamp].to_dict('records')
             data[timestamp] = curr_timestep
         self.max_ts = max(list(data.keys()))
+        if max_ts is not None: self.max_ts = min(self.max_ts, max_ts)
         self.ts = events_df["timestamp"].min()
         self.data = data
         self.sleep = sleep
@@ -553,7 +575,7 @@ def main(argv):
 
     data_dir = use_dataset(FLAGS.experiment, redownload=False)
     results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
-    name = f"results_workers_{FLAGS.update}_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}_sleep_{FLAGS.sleep}"
+    name = f"results_{FLAGS.update}_workers_{FLAGS.workers}_{FLAGS.scheduler}_learningrate_{FLAGS.learning_rate}_userfeaturereg_{FLAGS.user_feature_reg}_sleep_{FLAGS.sleep}"
     print("dataset", data_dir)
 
     ## create results file/directory
@@ -581,6 +603,7 @@ def main(argv):
         "key-fifo": KeyFIFO(), 
         "ml": MLFIFO(), 
         "least": LeastUpdate(),
+        "random": Random()
     }
 
     operators = {
@@ -594,7 +617,7 @@ def main(argv):
     timestamp = GlobalTimestamp.remote()
     movie_ff = app.source(
         #DataSource(f"{data_dir}/ratings.csv", timestamp, FLAGS.sleep),
-        DataSource(f"{data_dir}/test.csv", FLAGS.sleep),
+        DataSource(f"{data_dir}/test.csv", FLAGS.sleep, max_ts=40000),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, 
