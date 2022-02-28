@@ -1,4 +1,5 @@
 from ast import Global
+from collections import defaultdict
 import json
 import pickle
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
@@ -153,6 +154,46 @@ class FIFOSize(BaseScheduler):
         return self.queue.pop(0)
 
 
+class KeyFIFO(BaseScheduler):
+    def __init__(self) -> None:
+        self.waker: Optional[threading.Event] = None
+
+        # metric tracking
+        self.num_pending = defaultdict(lambda: 0)
+        self.last_updated = defaultdict(lambda: None)
+        self.num_updates = defaultdict(lambda: 0)
+
+        # queue
+        self.queue = []
+
+    def push_event(self, record: Record):
+        self.wake_waiter_if_needed()
+
+        # metric tracking
+        key = record.entry.user_id
+        self.num_pending[key] += 1
+
+        self.queue.append(record)
+        
+
+    def pop_event(self) -> Record:
+        if len(self.queue) == 0:
+            return Record.make_wait_event(self.new_waker())
+        
+        event = self.queue.pop(0)
+
+        # metrics 
+        key = event.entry.user_id
+        self.num_pending[key] -= 1
+        self.num_updates[key] += 1
+        self.last_updated[key] = time.time()
+        print("pending", self.num_pending)
+        print("num_updates", self.num_pending)
+
+        return event
+
+
+
 
 
 @dataclass 
@@ -226,6 +267,7 @@ class DataSource(BaseTransform):
         if self.ts % 100 == 0: 
             print("sending", self.ts, self.max_ts)
         time.sleep(self.sleep)
+        t = time.time()
         return [
             Record(
                 entry=SourceValue(
@@ -233,7 +275,7 @@ class DataSource(BaseTransform):
                     user_id=e["user_id"], 
                     timestamp=e["timestamp"], 
                     rating=e["rating"],
-                    ingest_time=time.time()
+                    ingest_time=t, 
                 ),
                 shard_key=str(e["user_id"])
             ) for e in events
@@ -298,6 +340,9 @@ class UserALSRow(BaseTransform):
         self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb")).tolist()
         self.num_updates = 0 
         self.user_feature_reg = user_feature_reg
+
+        # Note: updates take about 0.3-0.35s
+
 
     def on_event(self, record: Record):
         ui = self.user_to_index[str(record.entry.user_id)]
@@ -437,6 +482,7 @@ def main(argv):
         "fifo-1000": FIFOSize(1000), 
         "lifo": LIFO(), 
         "fifo": FIFO(), 
+        "key-fifo": KeyFIFO(), 
         "least": LeastUpdate(),
     }
 
@@ -460,18 +506,6 @@ def main(argv):
             ),         
             ray_config=RayOperatorConfig(num_replicas=1)
     )
-    #).transform(
-    #    Movie(movie_features), 
-    #    scheduler=FIFO(), 
-    #    operator_config=OperatorConfig(
-    #        simpy_config=SimpyOperatorConfig(
-    #            shared_env=env, 
-    #            processing_time_s=0.01, 
-    #        ),         
-    #        ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
-    #    )
-    #)
-    #user_ff = movie_ff.transform(
     ).transform(
         #User(movie_features, user_features, FLAGS.learning_rate, FLAGS.user_feature_reg),
         operators[FLAGS.update],
