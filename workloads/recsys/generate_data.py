@@ -12,8 +12,8 @@ import sys
 sys.path.insert(1, "../")
 from workloads.util import use_results, use_dataset, read_config, log_dataset
 
-data_dir = use_dataset("ml-25m")
-#data_dir = use_dataset("ml-latest-small")
+#data_dir = use_dataset("ml-25m")
+data_dir = use_dataset("ml-latest-small")
 ratings_path = f"{data_dir}/ratings.csv"
 tags_path = f"{data_dir}/tags.csv" 
 movies_path = f"{data_dir}/movies.csv"
@@ -30,7 +30,7 @@ movies.columns = ['movie_id', 'title', 'genres']
 print("read CV")
 users = list(set(ratings.user_id.tolist()))
 print("Num users", len(users))
-ratings = dd.from_pandas(ratings, npartitions=1000)
+ratings = dd.from_pandas(ratings) #, npartitions=1000)
 user_start_ts = {user: ratings[ratings["user_id"] == user].timestamp.min() for user in users}
 ratings.timestamp = ratings.apply(lambda x: x["timestamp"] - user_start_ts[x["user_id"]], axis=1)
 ratings.timestamp = ratings.timestamp.apply(lambda x: int(x/100))

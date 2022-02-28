@@ -164,33 +164,54 @@ class KeyFIFO(BaseScheduler):
         self.num_updates = defaultdict(lambda: 0)
 
         # queue
-        self.queue = []
+        self.queue = defaultdict(list)
+        self.stop_iteration = None
 
     def push_event(self, record: Record):
         self.wake_waiter_if_needed()
+
+        if record.is_stop_iteration(): 
+            self.stop_iteration = record
+            return 
 
         # metric tracking
         key = record.entry.user_id
         self.num_pending[key] += 1
 
-        self.queue.append(record)
-        
+        self.queue[key].append(record)
+       
+    def choose_key(self): 
+
+        last = None
+        last_key = None
+        for key in self.num_pending.keys(): 
+
+            # no waiting events
+            if self.num_pending[key] == 0: continue 
+
+            if last is None or self.last_updated[key] is None or self.last_updated[key] < last: 
+                last = self.last_updated[key]
+                last_key = key
+        return last_key
 
     def pop_event(self) -> Record:
-        if len(self.queue) == 0:
+        if self.stop_iteration:
+            return self.stop_iteration
+       
+        key = self.choose_key()
+        if key is None: 
             return Record.make_wait_event(self.new_waker())
-        
-        event = self.queue.pop(0)
+        events = self.queue[key]
+        self.queue[key] = []
 
         # metrics 
-        key = event.entry.user_id
-        self.num_pending[key] -= 1
-        self.num_updates[key] += 1
+        self.num_pending[key] = 0
+        self.num_updates[key] += len(events)
         self.last_updated[key] = time.time()
-        print("pending", self.num_pending)
-        print("num_updates", self.num_pending)
+        #print("pending", self.num_pending)
+        #print("num_updates", self.num_pending)
 
-        return event
+        return events
 
 
 
@@ -268,17 +289,25 @@ class DataSource(BaseTransform):
             print("sending", self.ts, self.max_ts)
         time.sleep(self.sleep)
         t = time.time()
+
+        # aggregate multiple updates into single list
+        movie_ids = defaultdict(list)
+        ratings = defaultdict(list)
+        for e in events:
+            movie_ids[e["user_id"]].append(e["movie_id"])
+            ratings[e["user_id"]].append(e["rating"])
+
         return [
             Record(
                 entry=SourceValue(
-                    movie_id=e["movie_id"], 
-                    user_id=e["user_id"], 
-                    timestamp=e["timestamp"], 
-                    rating=e["rating"],
+                    movie_id=movie_ids[user_id],
+                    user_id=user_id, 
+                    timestamp=curr_timestamp,
+                    rating=ratings[user_id],
                     ingest_time=t, 
                 ),
-                shard_key=str(e["user_id"])
-            ) for e in events
+                shard_key=str(user_id)
+            ) for user_id in movie_ids.keys()
         ]
 
 class UserSGD(BaseTransform):
@@ -296,6 +325,7 @@ class UserSGD(BaseTransform):
         self.lr = learning_rate
         self.reg = user_feature_reg
         self.num_updates = 0
+
 
     def on_event(self, record: Record):
         ui = self.user_to_index[record.entry.user_id]
@@ -344,9 +374,36 @@ class UserALSRow(BaseTransform):
         # Note: updates take about 0.3-0.35s
 
 
+    def on_events(self, records: List[Record]):
+
+        movie_ids = []
+        ratings = []
+
+        user = records[0].entry.user_id
+        timestamp = records[0].entry.timestamp
+        ingest_time = records[0].entry.ingest_time
+
+        for record in records:
+            assert record.entry.user_id == user
+            movie_ids  += record.entry.movie_id
+            ratings += record.entry.rating
+
+            if record.entry.timestamp > timestamp: timestamp = record.entry.timestamp
+            if record.entry.ingest_time > record.entry.ingest_time: ingest_time = record.entry.ingest_time
+
+        return self.on_event(Record(
+            entry=SourceValue(
+                user_id=user, 
+                movie_id=movie_ids, 
+                rating=ratings, 
+                timestamp=timestamp, 
+                ingest_time=ingest_time
+            )
+        ))
+
+
     def on_event(self, record: Record):
         ui = self.user_to_index[str(record.entry.user_id)]
-        mi = self.movie_to_index[str(record.entry.movie_id)]
         st = time.time()
 
         # required to make things writable... idk why
@@ -356,8 +413,11 @@ class UserALSRow(BaseTransform):
         self.movie_matrix = np.array(self.movie_matrix)
 
         # update matrix
-        self.A[ui][mi] = record.entry.rating
-        self.R[ui][mi] = 1
+        for i in range(len(record.entry.movie_id)):
+            mi = self.movie_to_index[str(record.entry.movie_id[i])]
+            rating = record.entry.rating[i]
+            self.A[ui][mi] = rating
+            self.R[ui][mi] = 1
 
         Ri = self.R[ui] 
         user_features = self.user_matrix[ui]
