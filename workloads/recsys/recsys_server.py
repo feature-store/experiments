@@ -18,6 +18,7 @@ import time
 
 # might need to do  export PYTHONPATH='.'
 from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
+from workloads.recsys.als import runALS
 
 FLAGS = flags.FLAGS
 
@@ -234,15 +235,6 @@ class DataSource(BaseTransform):
             ) for e in events
         ]
 
-#class Movie(BaseTransform):
-#    def __init__(self, movie_features: Dict) -> None:
-#        self.movie_features = movie_features
-#
-#    def on_event(self, record: Record):
-#        movie_id = record.entry.key
-#        movie_features = self.movie_features[movie_id]
-#        return Record(MovieValue(key=movie_id, movie_features=movie_features, user_id=record.entry.user_id, rating=record.entry.rating, timestamp=record.entry.timestamp, ingest_time=record.entry.ingest_time))
-
 class UserSGD(BaseTransform):
     """
     Maintain user embeddings with SGD updates
@@ -342,7 +334,7 @@ class UserALS(BaseTransform):
     """
     Maintain user embeddings by re-solving both user/movie matrix
     """
-    def __init__(self, data_dir: str, user_feature_reg: int = 0.1):
+    def __init__(self, data_dir: str, user_feature_reg: int = 0.1, n_iter: int = 2):
         self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
         self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
         self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb"))
@@ -364,11 +356,17 @@ class UserALS(BaseTransform):
         user_features = user_matrix[ui]
         n_factors = len(user_features)
 
-        # calculate new user vector
-        self.user_matrix[ui] = np.linalg.solve(
-            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.movie_matrix)) + self.user_feature_reg * np.eye(n_factors),
-            np.dot(self.movie_matrix.T, np.dot(np.diag(Ri), self.A[ui].T))
-        ).T
+    	self.user_matrix, self.movie_matrix = runALS(
+    	    A_matrix_batch, 
+    	    R_matrix_batch, 
+    	    n_factors, 
+    	    n_iter, 
+    	    reg, 
+    	    streaming_user_matrix_batch, 
+    	    streaming_movie_matrix_batch, 
+    	    users=None, # [ui], # filter user
+            gpu=False, 
+    	)
 
         runtime = time.time() - st
 
@@ -386,28 +384,6 @@ class UserALS(BaseTransform):
                 runtime=runtime
             )
         )
-
-
-
-
-#class WriteFeatures(BaseTransform): 
-#    def __init__(self, file_path: str, timestamp: GlobalTimestamp):
-#        df = pd.DataFrame({"user_id": [], "user_features": [], "ingest_timestamp": [], "timestamp": []})
-#        self.filename = file_path 
-#        self.ts = timestamp
-#        print("WRITING TO", self.filename)
-#        df.to_csv(self.filename, index=None)
-#
-#    def on_event(self, record: Record): 
-#        curr_timestamp = ray.get(self.ts.get_ts.remote())
-#        df = pd.DataFrame({'user_id': [record.entry.key], 'ingest_timestamp': [record.entry.timestamp], 'user_features': [list(record.entry.user_features)], 'timestamp': [curr_timestamp]})
-#        temp_csv = df.to_csv(index=None, header=None)
-#        #record_csv = f"{record.entry.key}, {list(record.entry.user_features)}, {curr_timestamp}\n"
-#        #print(record_csv == temp_csv)
-#        with open(self.filename, "a") as file:
-#            file.write(temp_csv)
-#        #print("wrote", record.entry.key, record.entry.timestamp)
-
 def get_features(file_path):
     df = pd.read_csv(file_path)
     features = dict()
