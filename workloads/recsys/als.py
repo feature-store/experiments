@@ -73,23 +73,28 @@ def runALS(A, R, n_factors, n_iterations, lambda_, user_matrix=None, movie_matri
     else: 
         Items = movie_matrix.T
 
-    def get_error(A, Users, Items, R):
-        if gpu:
-            return torch.sum((R * (A - torch.mm(Users, Items))) ** 2) / torch.sum(R)
-        return np.sum((R * (A - np.dot(Users, Items))) ** 2) / np.sum(R)
-
-
     if gpu: 
         device = torch.device('cuda')
         Users = torch.tensor(Users).to('cuda')
         Items = torch.tensor(Items).to('cuda')
         A = torch.tensor(A).to('cuda')
         R = torch.tensor(R).to('cuda')
-        eye = torch.eye(n_factors).cuda()
         lambda_ = torch.tensor(lambda_).to('cuda')
         n_factors = torch.tensor(n_factors).to('cuda')
 
+    return step(Users, Items, A, R, lambda_, n_factors, n_iterations)
+
+
+def step(Users, Items, A, R, lambda_, n_factors, n_iterations, users=None, gpu=True):
+
     MSE_List = []
+    eye = torch.eye(n_factors).cuda()
+
+    def get_error(A, Users, Items, R):
+        if gpu:
+            return torch.sum((R * (A - torch.mm(Users, Items))) ** 2) / torch.sum(R)
+        return np.sum((R * (A - np.dot(Users, Items))) ** 2) / np.sum(R)
+
 
     print("Starting Iterations")
     for iter in range(n_iterations):
@@ -120,7 +125,8 @@ def runALS(A, R, n_factors, n_iterations, lambda_, user_matrix=None, movie_matri
 
     print(MSE_List)
     if gpu: 
-        return Users.cpu().detach().numpy(), Items.T.cpu().detach().numpy()
+        #return Users.cpu().detach().numpy(), Items.T.cpu().detach().numpy()
+        return Users, Items.T
 
     return Users, Items.T
     
