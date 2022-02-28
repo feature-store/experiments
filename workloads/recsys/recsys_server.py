@@ -195,6 +195,9 @@ class DataSource(BaseTransform):
     #def __init__(self, file_path: str, ts: GlobalTimestamp, sleep: int = 0) -> None:
     def __init__(self, file_path: str, sleep: int = 0) -> None:
         events_df = pd.read_csv(file_path)
+        print(events_df.columns)
+        events_df = events_df.iloc[: , 1:]
+        print(events_df.columns)
         events_df.columns = ['user_id', 'movie_id', 'rating', 'timestamp']
         data = dict()
         for timestamp in events_df["timestamp"].unique():
@@ -225,13 +228,14 @@ class DataSource(BaseTransform):
         time.sleep(self.sleep)
         return [
             Record(
-                SourceValue(
+                entry=SourceValue(
                     movie_id=e["movie_id"], 
                     user_id=e["user_id"], 
                     timestamp=e["timestamp"], 
                     rating=e["rating"],
                     ingest_time=time.time()
-                )
+                ),
+                shard_key=str(e["user_id"])
             ) for e in events
         ]
 
@@ -252,12 +256,11 @@ class UserSGD(BaseTransform):
         self.num_updates = 0
 
     def on_event(self, record: Record):
-        user_id = record.entry.user_id
-        movie_id = record.entry.movie_id
+        ui = self.user_to_index[record.entry.user_id]
+        mi = self.movie_to_index[record.entry.movie_id]
         rating = record.entry.rating
+
         st = time.time()
-        ui = self.user_to_index[int(user_id)]
-        mi = self.movie_to_index[int(movie_id)]
         user_features = self.user_matrix[ui]
         prediction = user_features.dot(self.movie_matrix[mi].T)
         error = rating - prediction
@@ -271,14 +274,15 @@ class UserSGD(BaseTransform):
         self.num_updates += 1
 
         return Record(
-            UserValue(
+            entry=UserValue(
                 user_id=user_id, 
                 user_features=self.user_matrix[ui].tolist(), 
                 timestamp=record.entry.timestamp, 
                 ingest_time=record.entry.ingest_time, 
                 processing_time=time.time(), 
                 runtime=runtime
-            )
+            ), 
+            shard_key=str(user_id)
         )
 
 class UserALSRow(BaseTransform): 
@@ -288,19 +292,26 @@ class UserALSRow(BaseTransform):
     def __init__(self, data_dir: str, user_feature_reg: int = 10):
         self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
         self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
-        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb"))
-        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb"))
-        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb"))
-        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb"))
+        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb")).tolist()
+        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb")).tolist()
+        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb")).tolist()
+        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb")).tolist()
         self.num_updates = 0 
+        self.user_feature_reg = user_feature_reg
 
     def on_event(self, record: Record):
-        ui = record.entry.user_id
-        mi = record.entry.movie_id
+        ui = self.user_to_index[str(record.entry.user_id)]
+        mi = self.movie_to_index[str(record.entry.movie_id)]
         st = time.time()
 
+        # required to make things writable... idk why
+        self.A = np.array(self.A)
+        self.R = np.array(self.R)
+        self.user_matrix = np.array(self.user_matrix)
+        self.movie_matrix = np.array(self.movie_matrix)
+
         # update matrix
-        self.A[ui][mi] = row["rating"]
+        self.A[ui][mi] = record.entry.rating
         self.R[ui][mi] = 1
 
         Ri = self.R[ui] 
@@ -314,20 +325,22 @@ class UserALSRow(BaseTransform):
         ).T
 
         runtime = time.time() - st
+        print(f"Updated {ui}, {mi}, runtime: {runtime}")
 
         if self.num_updates % 100 == 0:
             print("Num updates", self.num_updates)
         self.num_updates += 1
 
         return Record(
-            UserValue(
-                user_id=user_id, 
+            entry=UserValue(
+                user_id=record.entry.user_id, 
                 user_features=self.user_matrix[ui].tolist(), 
                 timestamp=record.entry.timestamp, 
                 ingest_time=record.entry.ingest_time, 
                 processing_time=time.time(), 
                 runtime=runtime
-            )
+            ),
+            shard_key=str(record.entry.user_id)
         )
 
 class UserALS(BaseTransform): 
@@ -337,26 +350,32 @@ class UserALS(BaseTransform):
     def __init__(self, data_dir: str, user_feature_reg: int = 0.1, n_iter: int = 2):
         self.movie_to_index = json.load(open(f"{data_dir}/movie_to_index.json", "r"))
         self.user_to_index = json.load(open(f"{data_dir}/user_to_index.json", "r"))
-        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb"))
-        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb"))
-        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb"))
-        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb"))
+        self.A = pickle.load(open(f"{data_dir}/A.pkl", "rb")).tolist()
+        self.R = pickle.load(open(f"{data_dir}/R.pkl", "rb")).tolist()
+        self.user_matrix = pickle.load(open(f"{data_dir}/user_matrix.pkl", "rb")).tolist()
+        self.movie_matrix = pickle.load(open(f"{data_dir}/movie_matrix.pkl", "rb")).tolist()
         self.num_updates = 0 
 
     def on_event(self, record: Record):
-        ui = record.entry.user_id
-        mi = record.entry.movie_id
+        ui = self.user_to_index[str(record.entry.user_id)]
+        mi = self.movie_to_index[str(record.entry.movie_id)]
+
+        # required to make things writable... idk why
+        self.A = np.array(self.A)
+        self.R = np.array(self.R)
+        self.user_matrix = np.array(self.user_matrix)
+        self.movie_matrix = np.array(self.movie_matrix)
+
         st = time.time()
 
         # update matrix
-        self.A[ui][mi] = row["rating"]
+        self.A[ui][mi] = record.entry.rating
         self.R[ui][mi] = 1
 
         Ri = self.R[ui] 
         user_features = user_matrix[ui]
         n_factors = len(user_features)
-
-    	self.user_matrix, self.movie_matrix = runALS(
+        self.user_matrix, self.movie_matrix = runALS(
     	    A_matrix_batch, 
     	    R_matrix_batch, 
     	    n_factors, 
@@ -370,26 +389,23 @@ class UserALS(BaseTransform):
 
         runtime = time.time() - st
 
+        print(f"Updated {ui}, {mi}, runtime: {runtime}")
+
         if self.num_updates % 100 == 0:
             print("Num updates", self.num_updates)
         self.num_updates += 1
 
         return Record(
-            UserValue(
-                user_id=user_id, 
+            entry=UserValue(
+                user_id=record.entry.user_id, 
                 user_features=self.user_matrix[ui].tolist(), 
                 timestamp=record.entry.timestamp, 
                 ingest_time=record.entry.ingest_time, 
                 processing_time=time.time(), 
                 runtime=runtime
-            )
+            ), 
+            shard_key=str(record.entry.user_id)
         )
-def get_features(file_path):
-    df = pd.read_csv(file_path)
-    features = dict()
-    for row in df.itertuples():
-        features[row.id] = np.array(eval(row.features))
-    return features 
 
 def main(argv):
     print("Running Recsys pipeline on ralf...")
@@ -404,9 +420,6 @@ def main(argv):
         os.mkdir(results_dir)
     results_file = f"{results_dir}/{name}.csv"
     print("results file", results_file)
-
-    # read data
-    ratings_file = f"{data_dir}/ratings.csv"
 
     #deploy_mode = "ray"
     deploy_mode = "ray"
@@ -423,13 +436,14 @@ def main(argv):
         "fifo-100": FIFOSize(100), 
         "fifo-1000": FIFOSize(1000), 
         "lifo": LIFO(), 
+        "fifo": FIFO(), 
         "least": LeastUpdate(),
     }
 
     operators = {
         "sgd": UserSGD(data_dir, FLAGS.learning_rate, FLAGS.user_feature_reg),
         "user": UserALSRow(data_dir), 
-        "als": None, 
+        "als": UserALS(data_dir), 
     }
 
     # create feature frames
@@ -437,7 +451,7 @@ def main(argv):
     timestamp = GlobalTimestamp.remote()
     movie_ff = app.source(
         #DataSource(f"{data_dir}/ratings.csv", timestamp, FLAGS.sleep),
-        DataSource(f"{data_dir}/ratings.csv", FLAGS.sleep),
+        DataSource(f"{data_dir}/test.csv", FLAGS.sleep),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, 
@@ -478,6 +492,7 @@ def main(argv):
     if deploy_mode == "simpy": env.run(100)
     app.wait()
 
+    print(results_file)
     print("Completed run!")
     log_results(name)
 
