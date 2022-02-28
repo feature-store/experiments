@@ -158,10 +158,13 @@ class KeyFIFO(BaseScheduler):
     def __init__(self) -> None:
         self.waker: Optional[threading.Event] = None
 
+        self.start_time = time.time()
+
         # metric tracking
         self.num_pending = defaultdict(lambda: 0)
-        self.last_updated = defaultdict(lambda: None)
+        self.last_updated = defaultdict(lambda: self.start_time)
         self.num_updates = defaultdict(lambda: 0)
+
 
         # queue
         self.queue = defaultdict(list)
@@ -215,6 +218,39 @@ class KeyFIFO(BaseScheduler):
 
 
 
+class MLFIFO(KeyFIFO):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def choose_key(self): 
+
+        keys = []
+        s = []
+        p = []
+        u = []
+        t = time.time()
+        for key in self.num_pending.keys():
+            if self.num_pending[key] == 0: continue
+
+            s.append(t - self.last_updated[key])
+            p.append(self.num_pending[key])
+            u.append(self.num_updates[key])
+            keys.append(key)
+
+
+        max_score = 0
+        max_key = None
+        for key in keys: 
+
+            # "ML" function
+            # TODO: replace with actual learned model
+            score = s[keys.index(key)] + 10 * p[keys.index(key)]
+
+            if score > max_score:
+                max_score = score
+                max_key = key
+        return max_key
 
 
 @dataclass 
@@ -543,6 +579,7 @@ def main(argv):
         "lifo": LIFO(), 
         "fifo": FIFO(), 
         "key-fifo": KeyFIFO(), 
+        "ml": MLFIFO(), 
         "least": LeastUpdate(),
     }
 
