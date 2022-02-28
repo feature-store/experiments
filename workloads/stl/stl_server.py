@@ -294,7 +294,7 @@ def main(argv):
 
     schedulers = {
         "fifo": FIFO(),
-        "lifo": STLLIFO(keys=range(1, 101, 1)),
+        "lifo": LIFO(), #STLLIFO(keys=range(1, 101, 1)),
     }
 
     # create feature frames
