@@ -186,6 +186,7 @@ class KeyFIFO(BaseScheduler):
        
     def choose_key(self): 
 
+        st = time.time()
         last = None
         last_key = None
         for key in self.num_pending.keys(): 
@@ -196,6 +197,7 @@ class KeyFIFO(BaseScheduler):
             if last is None or self.last_updated[key] is None or self.last_updated[key] < last: 
                 last = self.last_updated[key]
                 last_key = key
+        print("choose time", time.time() - st)
         return last_key
 
     def pop_event(self) -> Record:
@@ -223,14 +225,17 @@ class Random(KeyFIFO):
         super().__init__(*args, **kwargs)
 
     def choose_key(self): 
-
+    
+        st = time.time()
         keys = []
         for key in self.num_pending.keys():
             if self.num_pending[key] == 0: continue
             keys.append(key)
         if len(keys) == 0: return None
 
-        return random.choice(keys)
+        key = random.choice(keys)
+        print("choose time", time.time() - st)
+        return key
 
 
 
@@ -242,12 +247,11 @@ class MLFIFO(KeyFIFO):
         super().__init__(*args, **kwargs)
 
     def choose_key(self): 
-
+        st = time.time()
         keys = []
         s = []
         p = []
         u = []
-        t = time.time()
         for key in self.num_pending.keys():
             if self.num_pending[key] == 0: continue
 
@@ -256,22 +260,31 @@ class MLFIFO(KeyFIFO):
             u.append(self.num_updates[key])
             keys.append(key)
 
+        if len(keys) == 0: 
+            return None
 
-        max_score = 0
+
+        max_score = None
         max_key = None
-        for key in keys: 
 
-            # "ML" function
-            # TODO: replace with actual learned model
-            i = keys.index(key) 
-            score = self.model.predict([[s[i], u[i], p[i]]])[0]
-            print("score", [s[i], p[i], u[i]], "->", score)
-            #score = s[keys.index(key)] + 10 * p[keys.index(key)]
+        print(np.array(list(zip(s, u, p))).shape)
+        scores = self.model.predict(np.array(list(zip(s, u, p))))
+        i = np.argmax(scores)
+        print("choose time", time.time() - st)
+        return keys[i]
 
-            if score > max_score:
-                max_score = score
-                max_key = key
-        return max_key
+        #for i in range(len(keys)):
+        #    # "ML" function
+        #    # TODO: replace with actual learned model
+        #    #score = self.model.predict([[s[i], u[i], p[i]]])[0]
+        #    #print("score", [s[i], p[i], u[i]], "->", score)
+        #    #score = s[keys.index(key)] + 10 * p[keys.index(key)]
+        #    score = scores[i]
+
+        #    if max_score is None or score > max_score:
+        #        max_score = score
+        #        max_key = keys[i]
+        #return max_key
 
 
 @dataclass 
@@ -312,7 +325,7 @@ class GlobalTimestamp:
 
 class DataSource(BaseTransform): 
     #def __init__(self, file_path: str, ts: GlobalTimestamp, sleep: int = 0) -> None:
-    def __init__(self, file_path: str, sleep: int = 0, max_ts = None) -> None:
+    def __init__(self, file_path: str, log_filename: str, sleep: int = 0, max_ts = None) -> None:
         events_df = pd.read_csv(file_path)
         print(events_df.columns)
         events_df = events_df.iloc[: , 1:]
@@ -328,6 +341,22 @@ class DataSource(BaseTransform):
         self.data = data
         self.sleep = sleep
         self.last_send_time = -1
+
+        # log when events are sent 
+        df = pd.DataFrame({"timestamp_ms": [], "timestamp": []})
+        self.filename = log_filename
+        df.to_csv(self.filename, index=None)
+        self.file = None
+
+    @property
+    def _file(self):
+        if self.file is None:
+            self.file = open(self.filename, "a")
+        return self.file
+
+
+
+
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
         #curr_timestamp = await ray.get(self.ts.get_ts.remote())
@@ -347,6 +376,11 @@ class DataSource(BaseTransform):
             print("sending", self.ts, self.max_ts)
         time.sleep(self.sleep)
         t = time.time()
+
+        # log timestamps 
+        df = pd.DataFrame({"timestamp": [curr_timestamp], "time": [t]})
+        self._file.write(df.to_csv(index=None, header=None))
+
 
         # aggregate multiple updates into single list
         movie_ids = defaultdict(list)
@@ -582,6 +616,7 @@ def main(argv):
     if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
     results_file = f"{results_dir}/{name}.csv"
+    timestamp_file = f"{results_dir}/timestamps/{name}.csv"
     print("results file", results_file)
 
     #deploy_mode = "ray"
@@ -617,7 +652,7 @@ def main(argv):
     timestamp = GlobalTimestamp.remote()
     movie_ff = app.source(
         #DataSource(f"{data_dir}/ratings.csv", timestamp, FLAGS.sleep),
-        DataSource(f"{data_dir}/test.csv", FLAGS.sleep, max_ts=40000),
+        DataSource(f"{data_dir}/test.csv", timestamp_file, FLAGS.sleep, max_ts=40000),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, 
