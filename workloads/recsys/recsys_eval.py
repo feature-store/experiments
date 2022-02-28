@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 import time
+from tqdm import tqdm 
 
 from pyspark.sql import SparkSession
 from pyspark.ml.evaluation import RegressionEvaluator
@@ -35,23 +36,42 @@ oracle_user_matrix = pickle.load(open(f"{results_dir}/oracle_models/user_matrix_
 oracle_movie_matrix = pickle.load(open(f"{results_dir}/oracle_models/movie_matrix_5665418.pkl", "rb")).cpu().detach().numpy()
 
 
-def evaluate(experiment): 
+def evaluate(experiment, all_movies=True): 
+    """
+    Evaluate experiment results 
+
+    :experiment: experiment name 
+    :all_movies: whether to evaluate on all movies or only rated movies (where label is provided)
+    """
 
     results_df = pd.read_csv(f'{results_dir}/{experiment}.csv')
     timestamp_df = pd.read_csv(f'{results_dir}/timestamps/{experiment}.csv').set_index("timestamp_ms")
 
     
-    def predict_oracle(user):
+    def predict_oracle(user, movie=None):
         ui = user_to_index[str(user)]
-        return [
-            np.dot(np.array(oracle_user_matrix[ui]), oracle_movie_matrix[mid]) 
-            for mid in range(oracle_movie_matrix.shape[0])
-        ]
+        if movie is None:
+            return [
+                np.dot(np.array(oracle_user_matrix[ui]), oracle_movie_matrix[mid]) 
+                for mid in range(oracle_movie_matrix.shape[0])
+            ]
+        mid = movie_to_index[str(int(movie))]
+        return np.dot(np.array(oracle_user_matrix[ui]), oracle_movie_matrix[mid])
 
 
-    def predict(user, ts): 
+    def predict(user, ts, movie=None): 
+        """
+        Run prediction for a user at a given timestamp. 
+
+        :ts: timestep from dataset (gets converted to processing_time)
+        :movie: movie ID to run prediction on - if None, run on all movies
+        """
         ui = user_to_index[str(user)]
-        processing_time = timestamp_df.loc[ts].timestamp
+        try:
+            processing_time = timestamp_df.loc[ts].timestamp
+        except Exception as e:
+            # timestamp not found
+            return None
 
         # processed updates in results
         update_df = results_df[(results_df["user_id"] == user) & (results_df["processing_time"] <= processing_time)]
@@ -60,56 +80,86 @@ def evaluate(experiment):
         # all events that should have been processed
         total_df = events_df[(events_df["user_id"] == user) & (events_df["timestamp"] <= ts)]
 
-        if len(total_df.index) == 0: 
+        if len(total_df.index) == 0: # no updates yet, so ignore
             return None
 
+        # select feature 
         if len(update_df.index) == 0:
             feature = user_matrix[ui]
             update_ts = total_df.timestamp.min()
         else:
             update_ts = update_df.timestamp.max()
             feature = ast.literal_eval(update_df.user_features.tolist()[-1])
-        
-        staleness = timestamp_df.loc[total_df.timestamp.max()].timestamp - timestamp_df.loc[update_ts].timestamp
 
         # metrics 
+        staleness = timestamp_df.loc[total_df.timestamp.max()].timestamp - timestamp_df.loc[update_ts].timestamp
         past_updates = len(processed_df.index)
         pending_updates = len(total_df.index) - past_updates
-        
-        prediction = [
-            np.dot(np.array(feature), movie_matrix[mid]) 
-            for mid in range(movie_matrix.shape[0])
-        ]
+
+        # run prediction
+        if movie is None: 
+            prediction = [
+                np.dot(np.array(feature), movie_matrix[mid]) 
+                for mid in range(movie_matrix.shape[0])
+            ]
+        else: 
+            mid = movie_to_index[str(int(movie))]
+            prediction = np.dot(np.array(feature), movie_matrix[mid])
 
         return {"prediction": prediction, "ts": ts, "user": user, "past_updates": past_updates, "pending_updates": pending_updates}
 
 
-    oracle_pred = {}
-    for user in events_df.user_id.value_counts().index.tolist():
-        oracle_pred[user] = predict_oracle(user)
-
-    data = []
-    for ts in range(100, 35000, 500): 
+    if all_movies:
+        # evaluate by looking at embeddings across all movies
+        oracle_pred = {}
         for user in events_df.user_id.value_counts().index.tolist():
-            res = predict(user, ts)
-            if res is None: 
-                continue
-            res["error"] = mean_squared_error(oracle_pred[user], res["prediction"])
-            data.append(res)
+            oracle_pred[user] = predict_oracle(user)
 
+        data = []
+        for ts in range(100, 35000, 500): 
+            for user in events_df.user_id.value_counts().index.tolist():
+                res = predict(user, ts)
+                if res is None: 
+                    continue
+                res["error"] = mean_squared_error(oracle_pred[user], res["prediction"])
+                data.append(res)
+
+            df = pd.DataFrame(data)
+            df.to_csv(f"{experiment}_all.csv")
+            print("timestamp", ts)
+            print("    error:", df.error.mean())
+            print("    pending:", df.pending_updates.mean())
+            print("    past:", df.past_updates.mean())
+
+        print(f"{experiment}_all.csv")
+    else:
+        # evaluate by trying to predict single movie rating 
+        data = []
+        for user in tqdm(events_df.user_id.value_counts().index.tolist()):
+            user_df = events_df[events_df["user_id"] == user]
+
+            for ts, rating, movie in user_df[["timestamp", "rating", "movie_id"]].values.tolist(): 
+                res = predict(user, int(ts), movie)
+                oracle_pred = predict_oracle(user, movie) 
+                if res is None:
+                    continue 
+                res["error"] = mean_squared_error([oracle_pred], [res["prediction"]])
+                res["oracle"] = oracle_pred
+                res["label"] = rating 
+                data.append(res)
         df = pd.DataFrame(data)
         df.to_csv(f"{experiment}.csv")
-        print("timestamp", ts)
+        print("user", user)
         print("    error:", df.error.mean())
+        print("    oracle-error:", mean_squared_error(df.oracle.tolist(), df.label.tolist()))
+        print("    feature-error:", mean_squared_error(df.prediction.tolist(), df.label.tolist()))
         print("    pending:", df.pending_updates.mean())
         print("    past:", df.past_updates.mean())
-
-    print(f"{experiment}.csv")
-
+        print(f"{experiment}.csv")
 
 if __name__ == "__main__":
 
-    experiment = "results_user_workers_1_random_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
-    evaluate(experiment)
+    experiment = "results_user_workers_2_key-fifo_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
+    evaluate(experiment, all_movies=False)
 
 
