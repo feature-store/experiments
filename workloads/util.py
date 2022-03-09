@@ -48,6 +48,10 @@ def download_dir(name, source_dir, target_dir):
         os.mkdir(os.path.join(target_dir, name))
 
     # download objects
+    if 'Contents' not in objs: 
+        print("Cannot download")
+        return os.path.join(target_dir, name)
+
     for obj in objs['Contents']: 
         key = obj['Key']
         target = target_dir + key.replace(source_dir, "")
