@@ -102,11 +102,13 @@ def evaluate(experiment, all_movies=True):
                 np.dot(np.array(feature), movie_matrix[mid]) 
                 for mid in range(movie_matrix.shape[0])
             ]
+            baseline = None
         else: 
             mid = movie_to_index[str(int(movie))]
             prediction = np.dot(np.array(feature), movie_matrix[mid])
+            baseline = np.dot(user_matrix[ui], movie_matrix[mid])
 
-        return {"prediction": prediction, "ts": ts, "user": user, "past_updates": past_updates, "pending_updates": pending_updates}
+        return {"prediction": prediction, "ts": ts, "user": user, "past_updates": past_updates, "pending_updates": pending_updates, "baseline": baseline, "staleness": staleness}
 
 
     if all_movies:
@@ -116,7 +118,7 @@ def evaluate(experiment, all_movies=True):
             oracle_pred[user] = predict_oracle(user)
 
         data = []
-        for ts in range(100, 35000, 500): 
+        for ts in range(100, 3000, 100): 
             for user in events_df.user_id.value_counts().index.tolist():
                 res = predict(user, ts)
                 if res is None: 
@@ -136,7 +138,7 @@ def evaluate(experiment, all_movies=True):
         # evaluate by trying to predict single movie rating 
         data = []
         for user in tqdm(events_df.user_id.value_counts().index.tolist()):
-            user_df = events_df[events_df["user_id"] == user]
+            user_df = events_df[(events_df["user_id"] == user) & (events_df["timestamp"] < 3000)]
 
             for ts, rating, movie in user_df[["timestamp", "rating", "movie_id"]].values.tolist(): 
                 res = predict(user, int(ts), movie)
@@ -153,13 +155,20 @@ def evaluate(experiment, all_movies=True):
         print("    error:", df.error.mean())
         print("    oracle-error:", mean_squared_error(df.oracle.tolist(), df.label.tolist()))
         print("    feature-error:", mean_squared_error(df.prediction.tolist(), df.label.tolist()))
+        print("    baseline-error:", mean_squared_error(df.baseline.tolist(), df.label.tolist()))
         print("    pending:", df.pending_updates.mean())
         print("    past:", df.past_updates.mean())
         print(f"{experiment}.csv")
 
 if __name__ == "__main__":
 
-    experiment = "results_user_workers_2_key-fifo_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
+    #experiment = "results_user_workers_4_random_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
+    #experiment = "results_user_workers_8_random_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
+    #experiment = "results_user_workers_8_random_learningrate_0.02_userfeaturereg_0.01_sleep_0.001"
+    experiment = "results_user_workers_2_ml_learningrate_0.02_userfeaturereg_0.01_sleep_0.01"
     evaluate(experiment, all_movies=False)
+
+    #experiment = "results_user_workers_2_random_learningrate_0.02_userfeaturereg_0.01_sleep_0.01"
+    #evaluate(experiment, all_movies=True)
 
 

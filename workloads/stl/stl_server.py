@@ -1,6 +1,7 @@
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
+import numpy as np
 from typing import List
 import os
 import time
@@ -9,6 +10,9 @@ import pandas as pd
 import simpy
 from statsmodels.tsa.seasonal import STL
 from absl import app, flags
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.forecasting.stl import STLForecast
+from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 import wandb
 
 # might need to do  export PYTHONPATH='.'
@@ -135,13 +139,12 @@ class WindowValue:
 @dataclass
 class TimeSeriesValue:
     key_id: str
-    trend: List[float]
-    seasonality: List[float]
-    timestamp_ms: int
+    forecast: List[float]
+    timestamp: int
     ingest_time: float
-    processing_time: int
     runtime: float
-
+    processing_time: float
+ 
 
 class DataSource(BaseTransform):
     def __init__(self, data_dir: str, log_filename: str) -> None:
@@ -238,37 +241,71 @@ class Window(BaseTransform):
                 shard_key=str(record.entry.key)
             )
 
+class STLFitForecast(BaseTransform):
 
-class STLFit(BaseTransform):
-    def __init__(self):
-        self.seasonality = 12
+    """
+    Fit STLForecast model and forecast future points. 
+    """
+
+    def __init__(self, seasonality, forecast):
+        self.seasonality = seasonality
+        self.forecast_len = forecast
 
     def on_event(self, record: Record):
         st = time.time()
-        stl_result = STL(record.entry.value, period=self.seasonality, robust=True).fit()
-        # print(time.time() - st, st)
-        trend = list(stl_result.trend)
-        # TODO: potentially interpolate trend? 
-        seasonality = list(stl_result.seasonal[-(self.seasonality + 1) : -1])
-        # print(record.entry.key, trend, seasonality)
-
+        #print("window", len(record.entry.value), record.entry.value[0])
+        model = STLForecast(
+            np.array(record.entry.value),
+            ARIMA, 
+            model_kwargs=dict(order=(1, 1, 0), trend="t"), 
+            period=self.seasonality
+        ).fit() 
+        forecast = model.forecast(self.forecast_len)
+        timestamp = record.entry.timestamp 
+        runtime = st - time.time()
+        #print(f"Foreast {record.entry.key}, {runtime}")
         return Record(
             entry=TimeSeriesValue(
-                key_id=record.entry.key,
-                trend=trend,
-                seasonality=seasonality,
-                timestamp_ms=record.entry.timestamp,
+                key_id=record.entry.key, 
+                forecast=forecast,
+                timestamp=record.entry.timestamp,
                 ingest_time=record.entry.ingest_time,
+                runtime=runtime,
                 processing_time=time.time(),
-                runtime=time.time() - st,
-            ),
+            ), 
             shard_key=str(record.entry.key)
         )
+
+#class STLFit(BaseTransform):
+    #def __init__(self):
+        #self.seasonality = 12
+
+    #def on_event(self, record: Record):
+        #st = time.time()
+        #stl_result = STL(record.entry.value, period=self.seasonality, robust=True).fit()
+        ## print(time.time() - st, st)
+        #trend = list(stl_result.trend)
+        ## TODO: potentially interpolate trend? 
+        #seasonality = list(stl_result.seasonal[-(self.seasonality + 1) : -1])
+        ## print(record.entry.key, trend, seasonality)
+
+        #return Record(
+            #entry=TimeSeriesValue(
+                #key_id=record.entry.key,
+                #trend=trend,
+                #seasonality=seasonality,
+                #timestamp_ms=record.entry.timestamp,
+                #ingest_time=record.entry.ingest_time,
+                #processing_time=time.time(),
+                #runtime=time.time() - st,
+            #),
+            #shard_key=str(record.entry.key)
+        #)
 
 def main(argv):
     print("Running STL pipeline on ralf...")
 
-    data_dir = use_dataset(FLAGS.experiment, redownload=False)
+    data_dir = use_dataset(FLAGS.experiment, download=False)
     results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
     name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}"
     print("Using data from", data_dir)
@@ -319,7 +356,7 @@ def main(argv):
         ),
     )
     stl_ff = window_ff.transform(
-        STLFit(),
+        STLFitForecast(seasonality=24, forecast=2000),
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
@@ -329,7 +366,8 @@ def main(argv):
             ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
         )
     ).transform(
-        WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
+        #WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
+        WriteFeatures(results_file, ["key_id", "forecast", "seasonality", "timestamp", "processing_time", "runtime", "ingest_time"])
     )
 
     app.deploy()

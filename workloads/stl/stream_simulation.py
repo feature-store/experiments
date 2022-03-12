@@ -1,4 +1,6 @@
 import json
+import time
+from collections import defaultdict
 import os
 from glob import glob
 
@@ -7,20 +9,32 @@ import numpy as np
 import pandas as pd
 from absl import app, flags
 from sktime.performance_metrics.forecasting import mean_squared_scaled_error
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.forecasting.stl import STLForecast
+from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 
+from tqdm import tqdm
+from statsmodels.tsa.seasonal import STL
+
+from workloads.util import use_results, use_dataset, read_config, log_dataset, log_results
 
 from absl import app, flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(
     "window_size",
-    default=48
+    default=48,
     help="Size of window to fit"
 )
 flags.DEFINE_integer(
     "num_keys",
     default=67,
     help="Number of keys to run on"
+)
+flags.DEFINE_integer(
+    "max_len",
+    default=700,
+    help="Length of time-series"
 )
 def simulate(data, start_ts, runtime, policy):
     """
@@ -35,14 +49,14 @@ def simulate(data, start_ts, runtime, policy):
     predictions = defaultdict(list)
     values = defaultdict(list)
     staleness = defaultdict(list)
-    score = [0 for i in range(1, flags.num_keys+1, 1)]
+    score = [0 for i in range(1, FLAGS.num_keys+1, 1)]
     update_times = defaultdict(list)
    
     # start with initial set of models
-    last_model = {key: get_model(key, start_ts) for key in range(1, flags.num_keys+1, 1)} 
+    last_model = {key: get_model(data, key, start_ts) for key in range(1, FLAGS.num_keys+1, 1)} 
     next_update_time = start_ts + runtime # time when model is completed
 
-    for ts in tqdm(range(start_ts, 1400, 1)):
+    for ts in tqdm(range(start_ts, FLAGS.max_len, 1)):
 
         # run predictions per key 
         for key in last_model.keys(): 
@@ -74,7 +88,7 @@ def simulate(data, start_ts, runtime, policy):
             
             # mark as update time for key 
             update_times[key].append(ts) 
-            last_model[key] = get_model(key, ts)
+            last_model[key] = get_model(data, key, ts)
             score[key-1] = 0
             
             # update next update time 
@@ -90,6 +104,19 @@ def simulate(data, start_ts, runtime, policy):
         for key in predictions.keys()
     ])
     return update_times, results_df
+
+def remove_anomaly(df): 
+    for index, row in df.iterrows(): 
+        if not row["is_anomaly"] or index < FLAGS.window_size: continue 
+            
+        chunk = df.iloc[index-FLAGS.window_size:index].value
+        model = STLForecast(
+            chunk, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=24
+        ).fit()
+        row["value"] = model.forecast(1).tolist()[0]
+        df.iloc[index] = pd.Series(row)
+
+    return df
 
 def error(df):
     """
@@ -114,7 +141,7 @@ def get_model(data, key, ts):
     :ts: last timestamp (fit ts - window of data)
     """
 
-    chunk = data[key][ts - WINDOW_SIZE : ts]
+    chunk = data[key][ts - FLAGS.window_size: ts]
     last_model = STLForecast(
         chunk, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=24
     ).fit()
@@ -128,8 +155,9 @@ def read_data(dataset_dir):
     """
 
     data = {}
-    for i in tqdm(range(1, flags.num_keys+1)):
+    for i in tqdm(range(1, FLAGS.num_keys+1)):
         df = remove_anomaly(pd.read_csv(f"{dataset_dir}/{i}.csv"))
+        assert len(df.index) >= FLAGS.max_len, f"Dataset size too small {len(df.index)}"
         arr = df.value.values 
         data[i] = arr 
     return data
@@ -137,20 +165,22 @@ def read_data(dataset_dir):
 def main(argv):
     runtime = [24, 12, 4]
     policy = ["round_robin", "total_error"]
-    name = f"yahoo_A1_window_{FLAGS.window_size}_{FLAGS.num_keys}"
+    name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
-    results_dir = use_results(name)
+    result_dir = use_results(name)
     dataset_dir = use_dataset("yahoo/A1")
 
     # aggregate data structures
     results_df = pd.DataFrame()
     updates_df = pd.DataFrame()
     df_all = pd.DataFrame()
+
+    data = read_data(dataset_dir)
     
     for r in runtime: 
         for p in policy: 
             
-            update_times, df = experiment(start_ts=WINDOW_SIZE, runtime=r, policy=p)
+            update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
             e = error(df)
             s = df.staleness.mean()
             u = sum([len(v) for v in update_times.values()])
@@ -174,8 +204,19 @@ def main(argv):
             df_all = pd.concat([df_all, df])
             results_df = pd.concat([results_df, r_df])
             updates_df = pd.concat([updates_df, u_df])
+            print("done", folder)
+
+	
             
     results_df.to_csv(f"{result_dir}/simulation_results.csv")
+    while True:
+        try:
+            log_results(name)
+            break
+        except Exception as e:
+            print(e) 
+            time.sleep(5)
+
 
 
 if __name__ == "__main__":

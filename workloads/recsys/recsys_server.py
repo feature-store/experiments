@@ -237,6 +237,26 @@ class Random(KeyFIFO):
         print("choose time", time.time() - st)
         return key
 
+class Bad(KeyFIFO):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def choose_key(self): 
+    
+        st = time.time()
+        keys = []
+        for key in self.num_pending.keys():
+            if self.num_pending[key] == 0: continue
+            keys.append(key)
+        if len(keys) == 0: return None
+
+        print("keys", keys)
+        key = keys[0]
+        print("choose time", time.time() - st)
+        return key
+
+
 
 
 class MLFIFO(KeyFIFO):
@@ -247,7 +267,7 @@ class MLFIFO(KeyFIFO):
         super().__init__(*args, **kwargs)
 
     def choose_key(self): 
-        st = time.time()
+        t = time.time()
         keys = []
         s = []
         p = []
@@ -270,7 +290,7 @@ class MLFIFO(KeyFIFO):
         print(np.array(list(zip(s, u, p))).shape)
         scores = self.model.predict(np.array(list(zip(s, u, p))))
         i = np.argmax(scores)
-        print("choose time", time.time() - st)
+        print("choose time", time.time() - t)
         return keys[i]
 
         #for i in range(len(keys)):
@@ -638,7 +658,8 @@ def main(argv):
         "key-fifo": KeyFIFO(), 
         "ml": MLFIFO(), 
         "least": LeastUpdate(),
-        "random": Random()
+        "random": Random(),
+        "bad": Bad(), 
     }
 
     operators = {

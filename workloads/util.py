@@ -71,6 +71,8 @@ def upload_dir(name, source_dir, target_dir):
     aws_access_key_id = cred["aws_access_key_id"]
     aws_secret_access_key = cred["aws_secret_access_key"] 
 
+    print("uploading", source_dir, name)
+
     # download form s3
     s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
     for root,dirs,files in os.walk(os.path.join(source_dir, name)):
@@ -84,26 +86,30 @@ def upload_dir(name, source_dir, target_dir):
 
     return f"{target_dir}/{name}"
 
-def use_dataset(name, redownload = False):
+def use_dataset(name, download = False):
     config = read_config()
    
     path = os.path.join(config["dataset_dir"], name)
     print(path)
-    if not os.path.isdir(path) or redownload: 
+    if download:
         # download form s3
         print("Downloading from aws:", config["aws_dir"])
         return download_dir(name, config["aws_dir"] + "/datasets", config["dataset_dir"])
+    elif not os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
 
     return os.path.join(config["dataset_dir"], name)
 
-def use_results(name, redownload = False):
+def use_results(name, download = False):
     config = read_config()
     
     path = os.path.join(config["results_dir"], name)
-    if not os.path.isdir(path) or redownload: 
+    if download:
         # download form s3
         print("Downloading from aws:", config["aws_dir"])
         return download_dir(name, config["aws_dir"] + "/results", config["results_dir"])
+    elif os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
 
     return os.path.join(config["results_dir"], name)
 
