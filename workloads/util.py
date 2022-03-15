@@ -148,18 +148,17 @@ class WriteFeatures(BaseTransform):
         self.cols = columns
         self.filename = filename 
         df.to_csv(self.filename, index=None)
-        self.file = None
+        #self.file = None
 
-    @property
-    def _file(self):
-        if self.file is None:
-            self.file = open(self.filename, "a")
-        return self.file
+    #@property
+    #def _file(self):
+        #if self.file is None:
+            #self.file = open(self.filename, "a")
+        #return self.file
 
     def on_event(self, record: Record): 
-        #print({col: [getattr(record.entry, col)] for col in self.cols})
         df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
-        self._file.write(df.to_csv(index=None, header=None))
+        df.to_csv(self.filename, mode="a", index=False, header=False)
       
 
 
@@ -195,6 +194,13 @@ def join_queries_features(queries_df, features_df, time_field="timestamp", key_f
         if fi >= len(features_df.index): break
 
         if features_df.iloc[fi][time_field] > ts or features_df.iloc[fi][key_field] != key: 
+
+            row = {col: None for col in features_df.iloc[fi].to_dict().keys()}
+            row["query_id"] = int(queries_df.iloc[qi].query_id)
+            row[f"query_{key_field}"] = queries_df.iloc[qi][key_field]
+            rows.append(row)
+
+
             continue
 
         assert features_df.iloc[fi][time_field] <= ts and features_df.iloc[fi][key_field] == key, f"Mismatch {fi}/{qi}: {features_df.iloc[fi].timestamp}/{ts}, {features_df.iloc[fi][key_field]}/{key}"
@@ -202,7 +208,6 @@ def join_queries_features(queries_df, features_df, time_field="timestamp", key_f
         row = features_df.iloc[fi].to_dict()
         row["query_id"] = int(queries_df.iloc[qi].query_id)
         row[f"query_{key_field}"] = queries_df.iloc[qi][key_field]
-        row["query_timestamp"] = queries_df.iloc[qi][time_field]
         rows.append(row)
 
     return pd.DataFrame(rows)

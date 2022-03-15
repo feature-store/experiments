@@ -13,7 +13,10 @@ from absl import app, flags
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.forecasting.stl import STLForecast
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
+from sktime.performance_metrics.forecasting import mean_squared_scaled_error
 import wandb
+import warnings
 
 # might need to do  export PYTHONPATH='.'
 from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
@@ -72,57 +75,112 @@ flags.DEFINE_string(
     required=False,
 )
 
-class STLLIFO(BaseScheduler):
-    def __init__(self, keys: List[str]) -> None:
+class CumulativeErrorScheduler(BaseScheduler):
+    """Order events by prioritizing keys with the largest cumulative error
+    """
+
+    def __init__(self, keys: List[int]) -> None:
         self.waker: Optional[threading.Event] = None
         self.stop_iteration = None
 
-        #self.queue = {key: [] for key in keys}
+        self.queue = defaultdict(lambda: None)
         self.keys = keys
-        self.queue: List[Record] = []
+
+        # priority tracking 
+        self.priority = [0] * (max([int(key) for key in keys]) + 1)
+        self.predictions = defaultdict(list)
+        self.values = defaultdict(list)
+        self.max_prio = 10000000
+
+    def update_priority(self, record):
+        key = record.entry.key_id
+        ts = record.entry.timestamp
+        value = record.entry.value[-1]
+
+        # run prediction
+        feature = self._operator.get(key)
+        if feature is None: 
+            # TODO: make sure this doesn't happen
+            assert False, f"Feature {key} not set"
+            self.priority[key] = self.max_prio
+            return 
+
+        forecast = feature.entry.forecast
+        model_ts = feature.entry.timestamp
+        ts_delta = ts - model_ts
+        if ts_delta >= len(forecast):
+            # TODO: make sure this doesn't happen
+            self.priority[key] = self.max_prio
+            return 
+
+        assert ts_delta >= 0, f"Model is has newer timestamp {model_ts}, {ts} - key {key}"
+        self.predictions[key].append(forecast[-(ts_delta)])
+        self.values[key].append(value)
+
+        assert len(self.values[key]) == len(self.predictions[key]), f"Mismatched lengths"
+
+        if len(self.values[key]) <= 1: 
+            # not enough points
+            return 
+
+        # calculate error
+        error = mean_absolute_scaled_error(
+            np.array(self.values[key]), 
+            np.array(self.predictions[key]), 
+            y_train=np.array(self.values[key])
+        )
+        self.priority[key] += error 
+
+    def choose_key(self): 
+        """Choose key to re-compute feature for.
+
+        :return: key to update next
+        :rtype: str
+        """
+
+        key = np.array(self.priority).argmax()
+
+        # clear errors 
+        self.priority[key] = 0
+        self.predictions[key] = []
+        self.values[key] = []
+       
+        #return key 
+        return key
 
     def push_event(self, record: Record):
         self.wake_waiter_if_needed()
         if record.is_stop_iteration():
-            #self.stop_iteration = record
-            #self.queue.insert(0, record)
-            self.queue.append(record)
+            self.stop_iteration = record
         else:
-            index = -1
-            for i in range(len(self.queue)): 
-                if not self.queue[i].is_stop_iteration() and self.queue[i].entry.key == record.entry.key: # override
-                    self.queue[i] = record
-                    index = i 
-            if index < 0:
-                self.queue.append(record)
+            # override with new window
+            self.queue[int(record.entry.key_id)] = record
+            #print("Window", record.entry.key_id, record.entry.timestamp)
 
-            assert len(self.queue) <= len(self.keys), f"Queue is too long {len(self.queue)}, limit: {len(self.keys)}"
-
-    #def choose_key(self): 
-    #    start_key = self.key_index
-    #    queue = []
-    #    while len(queue) == 0:
-
-    #        if self.key_index >= len(list(self.queue.keys())): 
-    #            self.key_index = 0 
-
-    #        queue = list(self.queue.keys())[self.key_index]
-    #        self.key_index += 1
-
+            # update priority
+            self.update_priority(record)
+            print(self.priority)
 
     def pop_event(self) -> Record:
         if self.stop_iteration: # return stop iteration record
+            print("Return STOP")
             return self.stop_iteration
-        if len(self.queue) == 0:
+
+        key = self.choose_key()
+        #print(self.queue)
+        if self.queue[key] is None: 
             return Record.make_wait_event(self.new_waker())
 
-        return self.queue.pop(0)
+        print("Pending", len([v for v in self.queue.values() if v is not None]))
+        event = self.queue[key]
+        self.queue[key] = None
+        return event
 
 
 
 @dataclass
 class SourceValue:
-    key: str
+    key_id: str
     value: int
     timestamp: int
     ingest_time: float
@@ -130,7 +188,7 @@ class SourceValue:
 
 @dataclass
 class WindowValue:
-    key: str
+    key_id: str
     value: List[int]
     timestamp: int
     ingest_time: float
@@ -147,11 +205,11 @@ class TimeSeriesValue:
  
 
 class DataSource(BaseTransform):
-    def __init__(self, data_dir: str, log_filename: str) -> None:
+    def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int) -> None:
 
         events_df = pd.read_csv(f"{data_dir}/events.csv")
 
-        self.ts = 0
+        self.ts = window_size # start at last window
         self.data = events_df
         self.last_send_time = -1
         self.total = len(events_df.index)
@@ -160,19 +218,12 @@ class DataSource(BaseTransform):
         self.ts_events = {key: self.ts_events[key].to_dict("records") for key in self.ts_events.keys()}
         self.max_ts = events_df.timestamp_ms.max()
         self.total_sent = 0
+        self.sleep = sleep
 
         # log when events are sent 
-        df = pd.DataFrame({"timestamp_ms": [], "timestamp": []})
+        df = pd.DataFrame({"timestamp": [], "processing_time": []})
         self.filename = log_filename
         df.to_csv(self.filename, index=None)
-        self.file = None
-
-    @property
-    def _file(self):
-        if self.file is None:
-            self.file = open(self.filename, "a")
-        return self.file
-
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
@@ -190,17 +241,18 @@ class DataSource(BaseTransform):
         ingest_time = time.time()
 
         # log timestamps 
-        df = pd.DataFrame({"timestamp_ms": [self.ts], "timestamp": [ingest_time]})
-        self._file.write(df.to_csv(index=None, header=None))
+        df = pd.DataFrame({"timestamp": [self.ts], "processing_time": [ingest_time]})
+        df.to_csv(self.filename, mode="a", index=False, header=False)
 
         if self.ts % 1000 == 0: 
             print(f"Sent events {ingest_time}: {self.total_sent} / {self.total}")
         self.ts += 1
-        time.sleep(0.001)
+        time.sleep(self.sleep)
+        print("TIMESTAMP", self.ts)
         return [
             Record(
                 entry=SourceValue(
-                    key=e["key_id"],
+                    key_id=e["key_id"],
                     value=e["value"],
                     timestamp=e["timestamp_ms"],
                     ingest_time=ingest_time,
@@ -217,28 +269,29 @@ class Window(BaseTransform):
         self.window_size = window_size
         self.slide_size = window_size if slide_size is None else slide_size
 
-    def on_event(self, record: Record):
-        self._data[record.entry.key].append(record.entry.value)
 
-        if len(self._data[record.entry.key]) >= self.window_size:
-            window = list(self._data[record.entry.key])
-            self._data[record.entry.key] = self._data[record.entry.key][
+    def on_event(self, record: Record):
+        self._data[record.entry.key_id].append(record.entry.value)
+
+        if len(self._data[record.entry.key_id]) >= self.window_size:
+            window = list(self._data[record.entry.key_id])
+            self._data[record.entry.key_id] = self._data[record.entry.key_id][
                 self.slide_size :
             ]
             assert (
-                len(self._data[record.entry.key]) == self.window_size - self.slide_size
-            ), f"List length is wrong size {len(self._data[record.entry.key])}"
+                len(self._data[record.entry.key_id]) == self.window_size - self.slide_size
+            ), f"List length is wrong size {len(self._data[record.entry.key_id])}"
 
             # return window record
             # print("window", record.entry.key, window)
             return Record(
                 entry=WindowValue(
-                    key=record.entry.key,
+                    key_id=record.entry.key_id,
                     value=window,
                     timestamp=record.entry.timestamp,
                     ingest_time=record.entry.ingest_time,
                 ), 
-                shard_key=str(record.entry.key)
+                shard_key=str(record.entry.key_id)
             )
 
 class STLFitForecast(BaseTransform):
@@ -247,34 +300,63 @@ class STLFitForecast(BaseTransform):
     Fit STLForecast model and forecast future points. 
     """
 
-    def __init__(self, seasonality, forecast):
+    def __init__(self, seasonality, forecast, window_size: int, data_dir: str):
         self.seasonality = seasonality
         self.forecast_len = forecast
+        #self.data = defaultdict(lambda: None)
+        self.data = self.init_data(data_dir, window_size)
 
-    def on_event(self, record: Record):
+    def init_data(self, data_dir, window_size):
+        events_df = pd.read_csv(f"{data_dir}/events.csv")
+        events = dict(tuple(events_df.groupby("key_id")))
+        data = {}
+        for key_id in events.keys(): 
+            print(events[key_id])
+            window = [e["value"] for e in events[key_id][:window_size]]
+            timestamp = events[key_id][window_size-1]["timestamp_ms"]
+            ingest_time = None
+            record = self.fit_model(key_id, window, timestamp, ingest_time)
+            data[key_id] = record
+        print("init data", data)
+        return data
+
+
+    def get(self, key): 
+        return self.data[key]
+
+    def fit_model(self, key_id, window, timestamp, ingest_time):
         st = time.time()
-        #print("window", len(record.entry.value), record.entry.value[0])
-        model = STLForecast(
-            np.array(record.entry.value),
-            ARIMA, 
-            model_kwargs=dict(order=(1, 1, 0), trend="t"), 
-            period=self.seasonality
-        ).fit() 
-        forecast = model.forecast(self.forecast_len)
-        timestamp = record.entry.timestamp 
-        runtime = st - time.time()
-        #print(f"Foreast {record.entry.key}, {runtime}")
+        # catch warning for ML fit
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            model = STLForecast(
+                np.array(window),
+                ARIMA, 
+                model_kwargs=dict(order=(1, 1, 0), trend="t"), 
+                period=self.seasonality
+            ).fit() 
+            forecast = model.forecast(self.forecast_len)
+        runtime = time.time() - st
         return Record(
             entry=TimeSeriesValue(
-                key_id=record.entry.key, 
-                forecast=forecast,
-                timestamp=record.entry.timestamp,
-                ingest_time=record.entry.ingest_time,
+                key_id=key_id, 
+                forecast=forecast.tolist(),
+                timestamp=timestamp,
                 runtime=runtime,
                 processing_time=time.time(),
             ), 
-            shard_key=str(record.entry.key)
+            shard_key=str(key_id)
         )
+
+    def on_event(self, record: Record):
+        result_record = self.fit_model(
+            record.entry.key_id, 
+            record.entry.value, 
+            record.entry.timestamp, 
+            record.entry.ingest_time
+        )
+        self.data[record.entry.key_id] = result_record
+        return result_record
 
 #class STLFit(BaseTransform):
     #def __init__(self):
@@ -332,12 +414,13 @@ def main(argv):
     schedulers = {
         "fifo": FIFO(),
         "lifo": LIFO(), #STLLIFO(keys=range(1, 101, 1)),
+        "ce": CumulativeErrorScheduler(keys=range(1, 101, 1)),
     }
 
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
-        DataSource(data_dir, timestamp_file),
+        DataSource(data_dir, timestamp_file, sleep=1, window_size=FLAGS.window_size),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
@@ -356,7 +439,7 @@ def main(argv):
         ),
     )
     stl_ff = window_ff.transform(
-        STLFitForecast(seasonality=24, forecast=2000),
+        STLFitForecast(seasonality=24, forecast=2000, window_size=FLAGS.window_size, data_dir=data_dir),
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
@@ -367,7 +450,7 @@ def main(argv):
         )
     ).transform(
         #WriteFeatures(results_file, ["key_id", "trend", "seasonality", "timestamp_ms", "processing_time", "runtime", "ingest_time"])
-        WriteFeatures(results_file, ["key_id", "forecast", "seasonality", "timestamp", "processing_time", "runtime", "ingest_time"])
+        WriteFeatures(results_file, ["key_id", "forecast", "timestamp", "processing_time", "runtime", "ingest_time"])
     )
 
     app.deploy()
@@ -379,6 +462,7 @@ def main(argv):
     query_results_file = f"{results_dir}/{name}_features.csv"
     query_file = f"{data_dir}/queries.csv"
 
+    print(f"See results {results_file}")
     log_results(name)
 
 
