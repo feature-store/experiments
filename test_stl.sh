@@ -1,6 +1,6 @@
 export NUMEXPR_MAX_THREADS=128
 
-for slide in 4
+for slide in 1
 do
     for workers in 1
     do 

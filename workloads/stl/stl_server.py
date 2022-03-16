@@ -1,4 +1,5 @@
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
+from abc import ABC, abstractmethod
 from tqdm import tqdm
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ import wandb
 import warnings
 
 # might need to do  export PYTHONPATH='.'
+from workloads.stl.stl_util import remove_anomaly
 from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
 
 FLAGS = flags.FLAGS
@@ -66,11 +68,9 @@ flags.DEFINE_string(
     required=False,
 )
 
-class CumulativeErrorScheduler(BaseScheduler):
-    """Order events by prioritizing keys with the largest cumulative error
-    """
+class PriorityScheduler(BaseScheduler):
 
-    def __init__(self, keys: List[int]) -> None:
+    def __init__(self, keys: List[int]) -> None: 
         self.waker: Optional[threading.Event] = None
         self.stop_iteration = None
         self.keys = keys
@@ -80,6 +80,88 @@ class CumulativeErrorScheduler(BaseScheduler):
 
         # priority tracking 
         self.priority = [0] * (max([int(key) for key in keys]) + 1)
+
+    @abstractmethod
+    def update_priority(self, record):
+        pass
+
+    def choose_key(self): 
+        """Choose key to re-compute feature for.
+
+        :return: key to update next
+        :rtype: str
+        """
+
+        key = np.array(self.priority).argmax()
+
+        # make sure key has pending events if they exist
+        if self.queue[key] is None: 
+            print("No pending", key, self.priority)
+            for k in self.queue.keys(): 
+                if self.queue[k] is not None: 
+                    key = k 
+                    break
+        self.priority[key] = 0
+        return key
+
+    def push_event(self, record: Record):
+        """Push new update record to be processed by the queue 
+        """
+        self.wake_waiter_if_needed()
+        if record.is_stop_iteration():
+            # set stop iteration flag 
+            self.stop_iteration = record
+        else:
+            # override with new window
+            self.queue[int(record.entry.key_id)] = record
+
+            # update priority
+            self.update_priority(record)
+            #print(self.priority)
+
+    def pop_event(self) -> Record:
+        """Pop update record to be processed by downstream operator
+        """
+        if self.stop_iteration: # return stop iteration record
+            print("Return STOP")
+            return self.stop_iteration
+
+        # choose next key to update
+        key = self.choose_key()
+        if self.queue[key] is None: 
+            # no pending events, so wait
+            print("No pending", key, self.priority)
+            return Record.make_wait_event(self.new_waker())
+
+        print("max key", key)
+        event = self.queue[key]
+        self.queue[key] = None # remove pending event for key
+        return event
+
+class RoundRobinScheduler(PriorityScheduler):
+
+    def __init__(self, keys: List[int]) -> None: 
+        super(RoundRobinScheduler, self).__init__(keys)
+
+    def update_priority(self, record: Record):
+        self.priority[record.entry.key_id] += 1
+
+
+class CumulativeErrorScheduler(PriorityScheduler):
+    """Order events by prioritizing keys with the largest cumulative error
+    """
+
+    def __init__(self, keys: List[int]) -> None:
+        super(CumulativeErrorScheduler, self).__init__(keys)
+        #self.waker: Optional[threading.Event] = None
+        #self.stop_iteration = None
+        #self.keys = keys
+
+        ## store pending updates
+        #self.queue = defaultdict(lambda: None)
+
+        ## priority tracking 
+        #self.priority = [0] * (max([int(key) for key in keys]) + 1)
         self.predictions = defaultdict(list)
         self.values = defaultdict(list)
         self.max_prio = 10000000
@@ -121,6 +203,7 @@ class CumulativeErrorScheduler(BaseScheduler):
 
         if len(self.values[key]) <= 1: 
             # not enough points
+            print("Not enough eval points", key, self.values[key], self.priority)
             return 
 
         # calculate total error
@@ -131,56 +214,67 @@ class CumulativeErrorScheduler(BaseScheduler):
         )
         # Note: the total error is equal to the length * MASE in this case
         self.priority[key] = error
+        #print(self.priority)
 
-    def choose_key(self): 
-        """Choose key to re-compute feature for.
+#    def choose_key(self): 
+        #"""Choose key to re-compute feature for.
 
-        :return: key to update next
-        :rtype: str
-        """
+        #:return: key to update next
+        #:rtype: str
+        #"""
 
-        key = np.array(self.priority).argmax()
+        #key = np.array(self.priority).argmax()
 
-        # clear errors 
-        self.priority[key] = 0
-        self.predictions[key] = []
-        self.values[key] = []
+        ## make sure key has pending events if they exist
+        #if self.queue[key] is None: 
+            #print("No pending", key, self.priority)
+            #for k in self.queue.keys(): 
+                #if self.queue[k] is not None: 
+                    #key = k 
+                    #break
+
+        ## clear errors 
+        #self.priority[key] = 0
+        #self.predictions[key] = []
+        #self.values[key] = []
        
-        #return key 
-        return key
+        ##return key 
+        #return key
 
-    def push_event(self, record: Record):
-        """Push new update record to be processed by the queue 
-        """
-        self.wake_waiter_if_needed()
-        if record.is_stop_iteration():
-            # set stop iteration flag 
-            self.stop_iteration = record
-        else:
-            # override with new window
-            self.queue[int(record.entry.key_id)] = record
+    #def push_event(self, record: Record):
+        #"""Push new update record to be processed by the queue 
+        #"""
+        #self.wake_waiter_if_needed()
+        #if record.is_stop_iteration():
+            ## set stop iteration flag 
+            #self.stop_iteration = record
+        #else:
+            ## override with new window
+            #self.queue[int(record.entry.key_id)] = record
 
-            # update priority
-            self.update_priority(record)
-            print(self.priority)
+            ## update priority
+            #self.update_priority(record)
+            ##print(self.priority)
 
-    def pop_event(self) -> Record:
-        """Pop update record to be processed by downstream operator
-        """
-        if self.stop_iteration: # return stop iteration record
-            print("Return STOP")
-            return self.stop_iteration
+    #def pop_event(self) -> Record:
+        #"""Pop update record to be processed by downstream operator
+        #"""
+        #if self.stop_iteration: # return stop iteration record
+            #print("Return STOP")
+            #return self.stop_iteration
 
-        # choose next key to update
-        key = self.choose_key()
-        if self.queue[key] is None: 
-            # no pending events, so wait
-            return Record.make_wait_event(self.new_waker())
+        ## choose next key to update
+        #key = self.choose_key()
+        #if self.queue[key] is None: 
+            ## no pending events, so wait
+            #print("No pending", key, self.priority)
+            #return Record.make_wait_event(self.new_waker())
 
-        print("Pending", len([v for v in self.queue.values() if v is not None]))
-        event = self.queue[key]
-        self.queue[key] = None # remove pending event for key
-        return event
+
+        #print("max key", key)
+        #event = self.queue[key]
+        #self.queue[key] = None # remove pending event for key
+        #return event
 
 
 @dataclass
@@ -190,20 +284,31 @@ class SourceValue:
     timestamp: int
     ingest_time: float
 
+def read_data(dataset_dir, keys, window_size): 
+    data = {}
+    print("Reading and smoothing data...")
+    for i in tqdm(keys): 
+        df = remove_anomaly(pd.read_csv(f"{dataset_dir}/{i}.csv"), window_size)
+        df.to_csv(f"{dataset_dir}/smooth_{i}.csv")
+        data[i] = df
+    return data
+
+
 class DataSource(BaseTransform):
 
     """Generate event data over keys
     """
     def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int, keys: List[int]) -> None:
 
-        self.ts = 0 # TODO: prefill and start at last window
+        self.ts = 0 #window_size # TODO: prefill and start at last window
         self.window_size = window_size
         self.keys = keys
 
         self.total_sent = 0
         self.sleep = sleep
 
-        self.data = self.read_data(data_dir, keys)
+        self.data = read_data(data_dir, keys, window_size)
+        self.data = {key: self.data[key].value.values for key in self.data.keys()}
         self.ts = 0
         self.max_ts = min([len(d) for d in self.data.values()])
         print(f"Timestamp up to {self.max_ts}")
@@ -212,30 +317,6 @@ class DataSource(BaseTransform):
         df = pd.DataFrame({"timestamp": [], "processing_time": []})
         self.filename = log_filename
         df.to_csv(self.filename, index=None)
-
-    def remove_anomaly(self, df): 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore")
-
-            for index, row in df.iterrows(): 
-                if not row["is_anomaly"] or index < self.window_size: continue 
-            
-                chunk = df.iloc[index-self.window_size:index].value
-                model = STLForecast(
-                    chunk, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=24
-                ).fit()
-                row["value"] = model.forecast(1).tolist()[0]
-                df.iloc[index] = pd.Series(row)
-
-            return df
-
-    def read_data(self, dataset_dir, keys): 
-        data = {}
-        print("Reading and smoothing data...")
-        for i in tqdm(keys): 
-            df = self.remove_anomaly(pd.read_csv(f"{dataset_dir}/{i}.csv"))
-            data[i] = df.value.values
-        return data
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
 
@@ -259,7 +340,6 @@ class DataSource(BaseTransform):
             print(f"Sent events {ingest_time}: {self.total_sent}")
         self.ts += 1
         time.sleep(self.sleep)
-        print("TIMESTAMP", self.ts)
         return [
             Record(
                 entry=SourceValue(
@@ -327,19 +407,18 @@ class STLFitForecast(BaseTransform):
     Fit STLForecast model and forecast future points. 
     """
 
-    def __init__(self, seasonality, forecast, window_size: int, data_dir: str):
+    def __init__(self, seasonality, forecast, window_size: int, data_dir: str, keys: List[int]):
         self.seasonality = seasonality
         self.forecast_len = forecast
         self.data = defaultdict(lambda: None)
-        #self.data = self.init_data(data_dir, window_size)
+        #self.data = self.init_data(data_dir, keys, window_size)
 
-    def init_data(self, data_dir, window_size):
-        events_df = pd.read_csv(f"{data_dir}/events.csv")
-        events = dict(tuple(events_df.groupby("key_id")))
-        data = {}
-        for key_id in events.keys(): 
-            window = events[key_id].value.tolist()[:window_size]
-            timestamp = events[key_id].timestamp_ms.tolist()[-1]
+    def init_data(self, data_dir, keys, window_size):
+
+        data = read_data(data_dir, keys, window_size)
+        for key_id in data.keys(): 
+            window = data[key_id].value.values[:window_size]
+            timestamp = data[key_id].timestamp.values[window_size-1]
             print(timestamp)
             #window = [e["value"] for e in events[key_id][:window_size]]
             #timestamp = events[key_id][window_size-1]["timestamp_ms"]
@@ -386,6 +465,7 @@ class STLFitForecast(BaseTransform):
             record.entry.ingest_time
         )
         self.data[record.entry.key_id] = result_record
+        print(f"Update key {record.entry.key_id}, timestep {record.entry.timestamp}")
         return result_record
 
 def main(argv):
@@ -407,8 +487,8 @@ def main(argv):
     timestamp_file = f"{results_dir}/{name}_timestamps.csv"
     print("results file", results_file)
 
-    # deploy_mode = "ray"
     deploy_mode = "ray"
+    #deploy_mode = "local"
     # deploy_mode = "simpy"
     app = RalfApplication(RalfConfig(deploy_mode=deploy_mode))
 
@@ -428,7 +508,7 @@ def main(argv):
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
-        DataSource(data_dir, timestamp_file, sleep=0.01, window_size=FLAGS.window_size, keys=keys),
+        DataSource(data_dir, timestamp_file, sleep=0.1, window_size=FLAGS.window_size, keys=keys),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
@@ -447,7 +527,7 @@ def main(argv):
         ),
     )
     stl_ff = window_ff.transform(
-        STLFitForecast(seasonality=24, forecast=2000, window_size=FLAGS.window_size, data_dir=data_dir),
+        STLFitForecast(seasonality=24, forecast=2000, window_size=FLAGS.window_size, data_dir=data_dir, keys=keys),
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
