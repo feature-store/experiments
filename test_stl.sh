@@ -4,7 +4,7 @@ for slide in 1
 do
     for workers in 1
     do 
-        for policy in "ce" #"fifo"
+        for policy in "rr" "ce" #"fifo"
         do
             TMPDIR=/data/wooders/tmp python workloads/stl/stl_server.py \
                 --experiment "yahoo/A1" \

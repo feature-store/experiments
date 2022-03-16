@@ -214,68 +214,6 @@ class CumulativeErrorScheduler(PriorityScheduler):
         )
         # Note: the total error is equal to the length * MASE in this case
         self.priority[key] = error
-        #print(self.priority)
-
-#    def choose_key(self): 
-        #"""Choose key to re-compute feature for.
-
-        #:return: key to update next
-        #:rtype: str
-        #"""
-
-        #key = np.array(self.priority).argmax()
-
-        ## make sure key has pending events if they exist
-        #if self.queue[key] is None: 
-            #print("No pending", key, self.priority)
-            #for k in self.queue.keys(): 
-                #if self.queue[k] is not None: 
-                    #key = k 
-                    #break
-
-        ## clear errors 
-        #self.priority[key] = 0
-        #self.predictions[key] = []
-        #self.values[key] = []
-       
-        ##return key 
-        #return key
-
-    #def push_event(self, record: Record):
-        #"""Push new update record to be processed by the queue 
-        #"""
-        #self.wake_waiter_if_needed()
-        #if record.is_stop_iteration():
-            ## set stop iteration flag 
-            #self.stop_iteration = record
-        #else:
-            ## override with new window
-            #self.queue[int(record.entry.key_id)] = record
-
-            ## update priority
-            #self.update_priority(record)
-            ##print(self.priority)
-
-    #def pop_event(self) -> Record:
-        #"""Pop update record to be processed by downstream operator
-        #"""
-        #if self.stop_iteration: # return stop iteration record
-            #print("Return STOP")
-            #return self.stop_iteration
-
-        ## choose next key to update
-        #key = self.choose_key()
-        #if self.queue[key] is None: 
-            ## no pending events, so wait
-            #print("No pending", key, self.priority)
-            #return Record.make_wait_event(self.new_waker())
-
-
-        #print("max key", key)
-        #event = self.queue[key]
-        #self.queue[key] = None # remove pending event for key
-        #return event
-
 
 @dataclass
 class SourceValue:
@@ -503,6 +441,7 @@ def main(argv):
         "fifo": FIFO(),
         "lifo": LIFO(), 
         "ce": CumulativeErrorScheduler(keys=keys),
+        "rr": RoundRobinScheduler(keys=keys),
     }
 
     # create feature frames
