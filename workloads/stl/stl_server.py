@@ -1,4 +1,5 @@
 from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
+import json
 from abc import ABC, abstractmethod
 from tqdm import tqdm
 from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
@@ -77,9 +78,13 @@ class PriorityScheduler(BaseScheduler):
 
         # store pending updates
         self.queue = defaultdict(lambda: None)
+        self.pending = defaultdict(lambda: None)
 
         # priority tracking 
-        self.priority = [0] * (max([int(key) for key in keys]) + 1)
+        self.priority = defaultdict(lambda: 0)
+        #self.priority = [0] * (max([int(key) for key in keys]) + 1)
+
+        
 
     @abstractmethod
     def update_priority(self, record):
@@ -92,16 +97,29 @@ class PriorityScheduler(BaseScheduler):
         :rtype: str
         """
 
-        key = np.array(self.priority).argmax()
+        max_prio = 0
+        key = None
+        print(self.priority)
+        for i in self.priority.keys(): 
 
-        # make sure key has pending events if they exist
-        if self.queue[key] is None: 
-            print("No pending", key, self.priority)
-            for k in self.queue.keys(): 
-                if self.queue[k] is not None: 
-                    key = k 
-                    break
+            #assert i is not None
+
+            if self.pending[i] is not None: 
+                continue 
+            if self.queue[i] is not None and self.priority[i] >= max_prio:
+                max_prio = self.priority[i]
+                key = i
+
+        #key = np.array(self.priority).argmax()
+        print(key, self.queue)
+        if key is None: return None
+
+        # update priority to 0 
+        assert key is not None
         self.priority[key] = 0
+        self.values[key] = []
+        self.ts[key] = []
+
         return key
 
     def push_event(self, record: Record):
@@ -113,8 +131,8 @@ class PriorityScheduler(BaseScheduler):
             self.stop_iteration = record
         else:
             # override with new window
+            assert record.entry.key_id is not None
             self.queue[int(record.entry.key_id)] = record
-
             # update priority
             self.update_priority(record)
             #print(self.priority)
@@ -128,14 +146,19 @@ class PriorityScheduler(BaseScheduler):
 
         # choose next key to update
         key = self.choose_key()
-        if self.queue[key] is None: 
+        assert self.priority[key] == 0
+        if key is None or self.queue[key] is None: 
             # no pending events, so wait
-            print("No pending", key, self.priority)
+            print("No pending", key, self.priority, self.queue)
             return Record.make_wait_event(self.new_waker())
 
         print("max key", key)
+        assert key is not None
         event = self.queue[key]
         self.queue[key] = None # remove pending event for key
+
+        # block selecting this key again until this feature is updated
+        self.pending[key] = event.entry.timestamp
         return event
 
 class RoundRobinScheduler(PriorityScheduler):
@@ -162,8 +185,8 @@ class CumulativeErrorScheduler(PriorityScheduler):
 
         ## priority tracking 
         #self.priority = [0] * (max([int(key) for key in keys]) + 1)
-        self.predictions = defaultdict(list)
         self.values = defaultdict(list)
+        self.ts = defaultdict(list)
         self.max_prio = 10000000
 
     def update_priority(self, record):
@@ -177,42 +200,57 @@ class CumulativeErrorScheduler(PriorityScheduler):
         ts = record.entry.timestamp
         value = record.entry.value[-1]
 
+        # add to tracked value
+        self.values[key].append(value)
+        self.ts[key].append(ts)
+
         # query current feature value (from STLModelForecast)
         feature = self._operator.get(key)
         if feature is None: 
             # TODO: make sure this doesn't happen
             #assert False, f"Feature {key} not set"
+            assert key is not None
             self.priority[key] = self.max_prio
             return 
 
-        forecast = feature.entry.forecast
         model_ts = feature.entry.timestamp
+
+        # check to make past update has been completed
+        if model_ts == self.pending[key]: 
+            print(f"Waitig for key {key} feature {model_ts} to complete")
+            return 
+        else:
+            # up-to-date feature
+            self.pending[key] = None
+
+        forecast = feature.entry.forecast
         ts_delta = ts - model_ts
         if ts_delta >= len(forecast):
             # TODO: make sure this doesn't happen
+            assert False 
             self.priority[key] = self.max_prio
             return 
 
         assert ts_delta >= 0, f"Model is has newer timestamp {model_ts}, {ts} - key {key}"
 
         # update predicted and actual values for key
-        self.predictions[key].append(forecast[-(ts_delta)])
-        self.values[key].append(value)
-
-        assert len(self.values[key]) == len(self.predictions[key]), f"Mismatched lengths"
+        predictions = [forecast[t] for t in self.ts[key]]
+        assert len(self.values[key]) == len(predictions), f"Mismatched lengths {ts_delta} values: {len(self.values[key])}, pred: {len(predictions)}, \n {model_ts} \n {self.ts[key]} \n {self.values[key]}"
+        
 
         if len(self.values[key]) <= 1: 
             # not enough points
-            print("Not enough eval points", key, self.values[key], self.priority)
+            #print("Not enough eval points", key, self.values[key], self.priority)
             return 
 
         # calculate total error
         error = len(self.values[key]) * mean_absolute_scaled_error(
             np.array(self.values[key]), 
-            np.array(self.predictions[key]), 
+            np.array(predictions), 
             y_train=np.array(self.values[key])
         )
         # Note: the total error is equal to the length * MASE in this case
+        assert error is not None
         self.priority[key] = error
 
 @dataclass
@@ -238,7 +276,7 @@ class DataSource(BaseTransform):
     """
     def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int, keys: List[int]) -> None:
 
-        self.ts = 0 #window_size # TODO: prefill and start at last window
+        self.ts = window_size # TODO: prefill and start at last window
         self.window_size = window_size
         self.keys = keys
 
@@ -348,8 +386,8 @@ class STLFitForecast(BaseTransform):
     def __init__(self, seasonality, forecast, window_size: int, data_dir: str, keys: List[int]):
         self.seasonality = seasonality
         self.forecast_len = forecast
-        self.data = defaultdict(lambda: None)
-        #self.data = self.init_data(data_dir, keys, window_size)
+        #self.data = defaultdict(lambda: None)
+        self.data = self.init_data(data_dir, keys, window_size)
 
     def init_data(self, data_dir, keys, window_size):
 
@@ -364,6 +402,7 @@ class STLFitForecast(BaseTransform):
             record = self.fit_model(key_id, window, timestamp, ingest_time)
             data[key_id] = record
         print("Generated init data")
+        open(f"{data_dir}/init_forecast.json", "w").write(json.dumps({key: data[key].entry.forecast for key in data.keys()}))
         return data
 
 
@@ -447,7 +486,7 @@ def main(argv):
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
-        DataSource(data_dir, timestamp_file, sleep=0.1, window_size=FLAGS.window_size, keys=keys),
+        DataSource(data_dir, timestamp_file, sleep=0.01, window_size=FLAGS.window_size, keys=keys),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
