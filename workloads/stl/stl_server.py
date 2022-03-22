@@ -26,6 +26,13 @@ from workloads.stl.stl_util import remove_anomaly
 from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
 
 FLAGS = flags.FLAGS
+
+flags.DEFINE_string(
+    "dataset",
+    default=None,
+    help="Dataset name",
+    required=True,
+)
 flags.DEFINE_string(
     "experiment",
     default=None,
@@ -99,7 +106,7 @@ class PriorityScheduler(BaseScheduler):
 
         max_prio = 0
         key = None
-        print(self.priority)
+        #print(self.priority)
         for i in self.priority.keys(): 
 
             #assert i is not None
@@ -111,7 +118,7 @@ class PriorityScheduler(BaseScheduler):
                 key = i
 
         #key = np.array(self.priority).argmax()
-        print(key, self.queue)
+        #print(key, self.queue)
         if key is None: return None
 
         # update priority to 0 
@@ -132,7 +139,7 @@ class PriorityScheduler(BaseScheduler):
         else:
             # override with new window
             assert record.entry.key_id is not None
-            self.queue[int(record.entry.key_id)] = record
+            self.queue[str(record.entry.key_id)] = record
             # update priority
             self.update_priority(record)
             #print(self.priority)
@@ -149,7 +156,7 @@ class PriorityScheduler(BaseScheduler):
         assert self.priority[key] == 0
         if key is None or self.queue[key] is None: 
             # no pending events, so wait
-            print("No pending", key, self.priority, self.queue)
+            print("No pending", key, self.priority)
             return Record.make_wait_event(self.new_waker())
 
         print("max key", key)
@@ -163,7 +170,7 @@ class PriorityScheduler(BaseScheduler):
 
 class RoundRobinScheduler(PriorityScheduler):
 
-    def __init__(self, keys: List[int]) -> None: 
+    def __init__(self, keys: List[str]) -> None: 
         super(RoundRobinScheduler, self).__init__(keys)
 
     def update_priority(self, record: Record):
@@ -174,7 +181,7 @@ class CumulativeErrorScheduler(PriorityScheduler):
     """Order events by prioritizing keys with the largest cumulative error
     """
 
-    def __init__(self, keys: List[int]) -> None:
+    def __init__(self, keys: List[str]) -> None:
         super(CumulativeErrorScheduler, self).__init__(keys)
         #self.waker: Optional[threading.Event] = None
         #self.stop_iteration = None
@@ -217,7 +224,7 @@ class CumulativeErrorScheduler(PriorityScheduler):
 
         # check to make past update has been completed
         if model_ts == self.pending[key]: 
-            print(f"Waitig for key {key} feature {model_ts} to complete")
+            print(f"Waiting for key {key} feature {model_ts} to complete")
             return 
         else:
             # up-to-date feature
@@ -274,7 +281,7 @@ class DataSource(BaseTransform):
 
     """Generate event data over keys
     """
-    def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int, keys: List[int]) -> None:
+    def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int, keys: List[int], dataset: str) -> None:
 
         self.ts = window_size # TODO: prefill and start at last window
         self.window_size = window_size
@@ -282,12 +289,27 @@ class DataSource(BaseTransform):
 
         self.total_sent = 0
         self.sleep = sleep
-
-        self.data = read_data(data_dir, keys, window_size)
-        self.data = {key: self.data[key].value.values for key in self.data.keys()}
         self.ts = 0
-        self.max_ts = min([len(d) for d in self.data.values()])
+
+        # read data
+        if dataset == "yahoo": 
+            self.data = read_data(data_dir, keys, window_size)
+            self.data = {key: self.data[key].value.values for key in self.data.keys()}
+            self.max_ts = min([len(d) for d in self.data.values()])
+            self.key = "key_id"
+        elif dataset == "azure": 
+            self.data = {}
+            lengths = []
+            for key in keys: 
+                df = pd.read_csv(f"{data_dir}/key_data/{key}.csv", index_col=0)
+                self.data[key] = df.avg.to_numpy()
+                lengths.append(len(df.index))
+            self.max_ts = min(lengths)
+            self.key = "vm_id"
+        else: 
+            raise ValueError("Invalid dataset", dataset)
         print(f"Timestamp up to {self.max_ts}")
+        
 
         # log when events are sent 
         df = pd.DataFrame({"timestamp": [], "processing_time": []})
@@ -386,25 +408,25 @@ class STLFitForecast(BaseTransform):
     def __init__(self, seasonality, forecast, window_size: int, data_dir: str, keys: List[int]):
         self.seasonality = seasonality
         self.forecast_len = forecast
-        #self.data = defaultdict(lambda: None)
-        self.data = self.init_data(data_dir, keys, window_size)
+        self.data = defaultdict(lambda: None)
+        #self.data = self.init_data(data_dir, keys, window_size)
 
-    def init_data(self, data_dir, keys, window_size):
-
-        data = read_data(data_dir, keys, window_size)
-        for key_id in data.keys(): 
-            window = data[key_id].value.values[:window_size]
-            timestamp = data[key_id].timestamp.values[window_size-1]
-            print(timestamp)
-            #window = [e["value"] for e in events[key_id][:window_size]]
-            #timestamp = events[key_id][window_size-1]["timestamp_ms"]
-            ingest_time = None
-            record = self.fit_model(key_id, window, timestamp, ingest_time)
-            data[key_id] = record
-        print("Generated init data")
-        open(f"{data_dir}/init_forecast.json", "w").write(json.dumps({key: data[key].entry.forecast for key in data.keys()}))
-        return data
-
+#    def init_data(self, data_dir, keys, window_size):
+#
+#        data = read_data(data_dir, keys, window_size)
+#        for key_id in data.keys(): 
+#            window = data[key_id].value.values[:window_size]
+#            timestamp = data[key_id].timestamp.values[window_size-1]
+#            print(timestamp)
+#            #window = [e["value"] for e in events[key_id][:window_size]]
+#            #timestamp = events[key_id][window_size-1]["timestamp_ms"]
+#            ingest_time = None
+#            record = self.fit_model(key_id, window, timestamp, ingest_time)
+#            data[key_id] = record
+#        print("Generated init data")
+#        open(f"{data_dir}/init_forecast.json", "w").write(json.dumps({key: data[key].entry.forecast for key in data.keys()}))
+#        return data
+#
 
     def get(self, key): 
         return self.data[key]
@@ -448,16 +470,23 @@ class STLFitForecast(BaseTransform):
 def main(argv):
     print("Running STL pipeline on ralf...")
 
-    data_dir = use_dataset(FLAGS.experiment, download=False)
+    # Setup dataset directory
+    if FLAGS.dataset == "yahoo": 
+        data_dir = use_dataset(FLAGS.experiment, download=False)
+        keys = range(1, 100, 1)
+    elif FLAGS.dataset == "azure":
+        data_dir = use_dataset(FLAGS.dataset, download=False)
+        keys = list(json.load(open(f"{data_dir}/{FLAGS.experiment}/keys.json", "r")))
+    else: 
+        raise ValueError("Invalid dataset", FLAGS.dataset)
+    print("Using data from", data_dir)
+
+    # Setup results directory
     results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
     name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}"
-    print("Using data from", data_dir)
     print("Making results for", results_dir)
 
-    # keys to read/process
-    keys = range(1, 15, 1)
-
-    ## create results file/directory
+    # create results file/directory
     if not os.path.isdir(results_dir):
         os.mkdir(results_dir)
     results_file = f"{results_dir}/{name}.csv"
@@ -486,7 +515,7 @@ def main(argv):
     # create feature frames
     # TODO: benchmark to figure out better processing_time values for simulation
     window_ff = app.source(
-        DataSource(data_dir, timestamp_file, sleep=0.01, window_size=FLAGS.window_size, keys=keys),
+        DataSource(data_dir, timestamp_file, sleep=0.01, window_size=FLAGS.window_size, keys=keys, dataset=FLAGS.dataset),
         operator_config=OperatorConfig(
             simpy_config=SimpyOperatorConfig(
                 shared_env=env, processing_time_s=0.01, stop_after_s=10
