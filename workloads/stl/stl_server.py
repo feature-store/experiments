@@ -89,6 +89,11 @@ class PriorityScheduler(BaseScheduler):
 
         # priority tracking 
         self.priority = defaultdict(lambda: 0)
+
+        # past event tracking
+        self.values = defaultdict(list)
+        self.ts = defaultdict(list)
+ 
         #self.priority = [0] * (max([int(key) for key in keys]) + 1)
 
         
@@ -192,8 +197,6 @@ class CumulativeErrorScheduler(PriorityScheduler):
 
         ## priority tracking 
         #self.priority = [0] * (max([int(key) for key in keys]) + 1)
-        self.values = defaultdict(list)
-        self.ts = defaultdict(list)
         self.max_prio = 10000000
 
     def update_priority(self, record):
