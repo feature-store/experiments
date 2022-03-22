@@ -51,11 +51,12 @@ You can run `python read_keys_azure.py` to process the raw data.
 ## Run Experiment
 ```
 python workloads/stl/stl_server.py \
-    --experiment azure/azure_small \
-    --scheduler fifo \
-    --window_size 864 \
+    --dataset "azure" \
+    --experiment "azure_100" \
+    --scheduler ${policy} \ 
+    --window_size 864 \ # do multples of 288
     --slide_size 1 \
-    --workers 4 \
+    --workers ${workers}
 ```
 
 
