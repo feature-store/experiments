@@ -46,6 +46,11 @@ azure/
 You can run `python read_keys_azure.py` to process the raw data. 
 
 ## Preprocessing Data 
+You can generate test data with the script below: 
+```
+python azure_generate_data.py --num_keys 100 --num_points 1000 --num_workers 64
+# output: azure_100 folder
+```
 
 
 ## Run Experiment
