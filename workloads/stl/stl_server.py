@@ -96,7 +96,27 @@ class PriorityScheduler(BaseScheduler):
  
         #self.priority = [0] * (max([int(key) for key in keys]) + 1)
 
-        
+
+    def num_queue(self): 
+        total = 0
+        for key in self.queue.keys(): 
+            if self.queue[key] is not None:
+                total += 1
+        return total
+
+    def num_pending(self):
+        total = 0
+        for key in self.pending.keys(): 
+            if self.pending[key] is not None:
+                total += 1
+        return total
+
+    def num_processed(self): 
+        total = 0
+        for key in self.values.keys(): 
+            if self.values[key] is not None: 
+                total += 1
+        return total
 
     @abstractmethod
     def update_priority(self, record):
@@ -165,6 +185,7 @@ class PriorityScheduler(BaseScheduler):
             return Record.make_wait_event(self.new_waker())
 
         print("max key", key)
+        print("Pending", self.num_pending(), "Queue", self.num_queue(), "Values", self.num_processed())
         assert key is not None
         event = self.queue[key]
         self.queue[key] = None # remove pending event for key
