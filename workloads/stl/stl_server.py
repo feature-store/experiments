@@ -1,44 +1,39 @@
-from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record, BaseScheduler
+import glob
+import itertools
 import json
-from abc import ABC, abstractmethod
-from tqdm import tqdm
-from ralf.v2.operator import OperatorConfig, SimpyOperatorConfig, RayOperatorConfig
-from dataclasses import dataclass
-import numpy as np
-from typing import List
 import os
+import sqlite3
+import threading
 import time
+import warnings
+from abc import abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import DefaultDict, Dict, List, Optional, Tuple
+
+import numpy as np
 import pandas as pd
-import simpy
-from statsmodels.tsa.seasonal import STL
 from absl import app, flags
+from ralf.v2 import (
+    FIFO,
+    LIFO,
+    BaseScheduler,
+    BaseTransform,
+    RalfApplication,
+    RalfConfig,
+    Record,
+)
+from ralf.v2.operator import OperatorConfig, RayOperatorConfig
+from ralf.v2.utils import get_logger
+from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.forecasting.stl import STLForecast
-from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
-from statsmodels.tools.sm_exceptions import ConvergenceWarning
-from sktime.performance_metrics.forecasting import mean_squared_scaled_error
-import wandb
-import warnings
+from sortedcontainers import SortedSet
 
-# might need to do  export PYTHONPATH='.'
-from workloads.stl.stl_util import remove_anomaly
-from workloads.util import read_config, use_dataset, log_dataset, log_results, WriteFeatures
+logger = get_logger()
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string(
-    "dataset",
-    default=None,
-    help="Dataset name",
-    required=True,
-)
-flags.DEFINE_string(
-    "experiment",
-    default=None,
-    help="Experiment name",
-    required=True,
-)
 flags.DEFINE_string(
     "scheduler",
     default=None,
@@ -59,529 +54,452 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "workers",
-    default=2,
-    help="Number of workers for bottlenck operator",
-    required=False,
-)
-flags.DEFINE_string(
-    "source_dir",
     default=None,
-    help="Dataset directory",
-    required=False,
+    help="Number of workers for bottlenck operator",
+    required=True,
 )
 flags.DEFINE_string(
-    "target_dir",
-    default="./results",
-    help="Result target directory",
+    "azure_database",
+    default=None,
+    help="Azure time series database",
+    required=True,
+)
+
+flags.DEFINE_string(
+    "results_dir",
+    default=f"results/{int(time.time())}",
+    help="Diretory to write result jsonl to",
     required=False,
 )
 
-class PriorityScheduler(BaseScheduler):
+KeyType = int
 
-    def __init__(self, keys: List[int]) -> None: 
+
+class BasePriorityScheduler(BaseScheduler):
+    def __init__(self):
+        self.key_to_event: Dict[KeyType, Record] = dict()
+        self.key_to_priority: Dict[KeyType, float] = dict()
+        self.sorted_keys_by_timestamp = SortedSet(
+            key=lambda key: self.key_to_priority[key]
+        )
         self.waker: Optional[threading.Event] = None
         self.stop_iteration = None
-        self.keys = keys
+        self._writer_lock = None
 
-        # store pending updates
-        self.queue = defaultdict(lambda: None)
-        self.pending = defaultdict(lambda: None)
-
-        # priority tracking 
-        self.priority = defaultdict(lambda: 0)
-
-        # past event tracking
-        self.values = defaultdict(list)
-        self.ts = defaultdict(list)
- 
-        #self.priority = [0] * (max([int(key) for key in keys]) + 1)
-
-
-    def num_queue(self): 
-        total = 0
-        for key in self.queue.keys(): 
-            if self.queue[key] is not None:
-                total += 1
-        return total
-
-    def num_pending(self):
-        total = 0
-        for key in self.pending.keys(): 
-            if self.pending[key] is not None:
-                total += 1
-        return total
-
-    def num_processed(self): 
-        total = 0
-        for key in self.values.keys(): 
-            if self.values[key] is not None: 
-                total += 1
-        return total
+    @property
+    def writer_lock(self):
+        if self._writer_lock is None:
+            self._writer_lock = threading.Lock()
+        return self._writer_lock
 
     @abstractmethod
-    def update_priority(self, record):
+    def compute_priority(self, record: Record) -> float:
         pass
 
-    def choose_key(self): 
-        """Choose key to re-compute feature for.
-
-        :return: key to update next
-        :rtype: str
-        """
-
-        max_prio = 0
-        key = None
-        #print(self.priority)
-        for i in self.priority.keys(): 
-
-            #assert i is not None
-
-            if self.pending[i] is not None: 
-                continue 
-            if self.queue[i] is not None and self.priority[i] >= max_prio:
-                max_prio = self.priority[i]
-                key = i
-
-        #key = np.array(self.priority).argmax()
-        #print(key, self.queue)
-        if key is None: return None
-
-        # update priority to 0 
-        assert key is not None
-        self.priority[key] = 0
-        self.values[key] = []
-        self.ts[key] = []
-
-        return key
-
     def push_event(self, record: Record):
-        """Push new update record to be processed by the queue 
-        """
-        self.wake_waiter_if_needed()
         if record.is_stop_iteration():
-            # set stop iteration flag 
             self.stop_iteration = record
-        else:
-            # override with new window
-            assert record.entry.key_id is not None
-            self.queue[str(record.entry.key_id)] = record
-            # update priority
-            self.update_priority(record)
-            #print(self.priority)
+            self.wake_waiter_if_needed()
+            return
+
+        record_key = record.shard_key
+        with self.writer_lock:
+            self.key_to_event[record_key] = record
+            # Remove the key so we can recompute sort key
+            if record_key in self.sorted_keys_by_timestamp:
+                self.sorted_keys_by_timestamp.remove(record_key)
+            self.key_to_priority[record_key] = self.compute_priority(record)
+            self.sorted_keys_by_timestamp.add(record_key)
+        self.wake_waiter_if_needed()
 
     def pop_event(self) -> Record:
-        """Pop update record to be processed by downstream operator
-        """
-        if self.stop_iteration: # return stop iteration record
-            print("Return STOP")
+        if self.stop_iteration:
             return self.stop_iteration
 
-        # choose next key to update
-        key = self.choose_key()
-        assert self.priority[key] == 0
-        if key is None or self.queue[key] is None: 
-            # no pending events, so wait
-            print("No pending", key, self.priority)
-            return Record.make_wait_event(self.new_waker())
+        with self.writer_lock:
+            if len(self.key_to_event) == 0:
+                return Record.make_wait_event(self.new_waker())
+            latest_key = self.sorted_keys_by_timestamp.pop()
+            record = self.key_to_event.pop(latest_key)
+            self.key_to_priority.pop(latest_key)
+        return record
 
-        print("max key", key)
-        print("Pending", self.num_pending(), "Queue", self.num_queue(), "Values", self.num_processed())
-        assert key is not None
-        event = self.queue[key]
-        self.queue[key] = None # remove pending event for key
-
-        # block selecting this key again until this feature is updated
-        self.pending[key] = event.entry.timestamp
-        return event
-
-class RoundRobinScheduler(PriorityScheduler):
-
-    def __init__(self, keys: List[str]) -> None: 
-        super(RoundRobinScheduler, self).__init__(keys)
-
-    def update_priority(self, record: Record):
-        self.priority[record.entry.key_id] += 1
+    def qsize(self) -> int:
+        return len(self.key_to_event)
 
 
-class CumulativeErrorScheduler(PriorityScheduler):
-    """Order events by prioritizing keys with the largest cumulative error
-    """
+class KeyAwareLifo(BasePriorityScheduler):
+    """Always prioritize the latest record by arrival time."""
 
-    def __init__(self, keys: List[str]) -> None:
-        super(CumulativeErrorScheduler, self).__init__(keys)
-        #self.waker: Optional[threading.Event] = None
-        #self.stop_iteration = None
-        #self.keys = keys
+    def compute_priority(self, _: Record) -> float:
+        return time.time()
 
-        ## store pending updates
-        #self.queue = defaultdict(lambda: None)
 
-        ## priority tracking 
-        #self.priority = [0] * (max([int(key) for key in keys]) + 1)
-        self.max_prio = 10000000
+class RoundRobinScheduler(BasePriorityScheduler):
+    """Prioritize the key that hasn't been updated for longest."""
 
-    def update_priority(self, record):
-        """Update key priority scores based off new record arrival. 
-        The priority is re-calculated by taking the MASE of the predicted records with teh STL model forecast compared to the actual record values that the scheduler receives.
+    def compute_priority(self, record: Record) -> float:
+        return self.key_to_priority.get(record.shard_key, 0) + 1
 
-        :param record: New update event record
-        :type record: Record
-        """
-        key = record.entry.key_id
-        ts = record.entry.timestamp
-        value = record.entry.value[-1]
 
-        # add to tracked value
-        self.values[key].append(value)
-        self.ts[key].append(ts)
+class CumulativeErrorScheduler(BasePriorityScheduler):
+    """Prioritize the key that has highest prediction error so far"""
 
-        # query current feature value (from STLModelForecast)
-        feature = self._operator.get(key)
-        if feature is None: 
-            # TODO: make sure this doesn't happen
-            #assert False, f"Feature {key} not set"
-            assert key is not None
-            self.priority[key] = self.max_prio
-            return 
+    max_prio = 10000000
 
-        model_ts = feature.entry.timestamp
+    def __init__(self):
+        # TODO: bring back the logic that temporarily disable a key if it is pending update
+        # If that ever becomes an issue.
+        # self.pending_updates: Dict[KeyType, float] = []
 
-        # check to make past update has been completed
-        if model_ts == self.pending[key]: 
-            print(f"Waiting for key {key} feature {model_ts} to complete")
-            return 
-        else:
-            # up-to-date feature
-            self.pending[key] = None
+        super().__init__()
 
-        forecast = feature.entry.forecast
-        ts_delta = ts - model_ts
-        if ts_delta >= len(forecast):
-            # TODO: make sure this doesn't happen
-            assert False 
-            self.priority[key] = self.max_prio
-            return 
+    def compute_priority(self, record: Record["WindowValue"]) -> float:
+        assert isinstance(record.entry, WindowValue)
 
-        assert ts_delta >= 0, f"Model is has newer timestamp {model_ts}, {ts} - key {key}"
+        feature: Record[TimeSeriesValue] = self._operator.get(record.shard_key)
+        if feature is None:
+            logger.msg(
+                f"Missing feature for key {record.shard_key}, returning max_prio"
+            )
+            return self.max_prio
 
-        # update predicted and actual values for key
-        predictions = [forecast[t] for t in self.ts[key]]
-        assert len(self.values[key]) == len(predictions), f"Mismatched lengths {ts_delta} values: {len(self.values[key])}, pred: {len(predictions)}, \n {model_ts} \n {self.ts[key]} \n {self.values[key]}"
-        
+        incoming_seqnos = np.array(record.entry.seq_nos)
+        forecast = np.array(feature.forecast)
+        window_last_seqno = feature.last_seqno
+        forecast_indicies = incoming_seqnos - window_last_seqno - 1
 
-        if len(self.values[key]) <= 1: 
-            # not enough points
-            #print("Not enough eval points", key, self.values[key], self.priority)
-            return 
+        positive_indicies = np.argwhere(forecast_indicies >= 0)
+        forecast_indicies = np.take(forecast_indicies, positive_indicies)
 
-        # calculate total error
-        error = len(self.values[key]) * mean_absolute_scaled_error(
-            np.array(self.values[key]), 
-            np.array(predictions), 
-            y_train=np.array(self.values[key])
+        y_true = np.take(record.entry.values, positive_indicies)
+        y_pred = np.take(forecast, forecast_indicies)
+        y_train = np.array(feature.y_train)
+
+        # TODO: sample if too heavy weight
+        # TODO: maybe scale this by staleness
+        error = mean_absolute_scaled_error(
+            y_true=y_true, y_pred=y_pred, y_train=y_train
         )
-        # Note: the total error is equal to the length * MASE in this case
-        assert error is not None
-        self.priority[key] = error
+        return error
+
 
 @dataclass
 class SourceValue:
-    key_id: str
-    value: int
-    timestamp: int
+    key_id: int
+    value: float
+    seq_no: int
     ingest_time: float
-
-def read_data(dataset_dir, keys, window_size): 
-    data = {}
-    print("Reading and smoothing data...")
-    for i in tqdm(keys): 
-        df = remove_anomaly(pd.read_csv(f"{dataset_dir}/{i}.csv"), window_size)
-        df.to_csv(f"{dataset_dir}/smooth_{i}.csv")
-        data[i] = df
-    return data
 
 
 class DataSource(BaseTransform):
+    """Generate event data over keys"""
 
-    """Generate event data over keys
-    """
-    def __init__(self, data_dir: str, log_filename: str, sleep: float, window_size: int, keys: List[int], dataset: str) -> None:
+    def __init__(
+        self,
+        keys: List[int],
+        sleep: float,
+        results_dir: str,
+        azure_database: str,
+        all_timestamps: List[int],
+    ):
 
-        self.ts = window_size # TODO: prefill and start at last window
-        self.window_size = window_size
         self.keys = keys
-
-        self.total_sent = 0
         self.sleep = sleep
-        self.ts = 0
+        self.ts = -1
+        self.results_dir = results_dir
+        self.azure_database = azure_database
+        self.all_timestamps = all_timestamps
 
-        # read data
-        if dataset == "yahoo": 
-            self.data = read_data(data_dir, keys, window_size)
-            self.data = {key: self.data[key].value.values for key in self.data.keys()}
-            self.max_ts = min([len(d) for d in self.data.values()])
-            self.key = "key_id"
-        elif dataset == "azure": 
-            self.data = {}
-            lengths = []
-            for key in keys: 
-                df = pd.read_csv(f"{data_dir}/key_data/{key}.csv", index_col=0)
-                self.data[key] = df.avg.to_numpy()
-                lengths.append(len(df.index))
-            self.max_ts = min(lengths)
-            self.key = "vm_id"
-        else: 
-            raise ValueError("Invalid dataset", dataset)
-        print(f"Timestamp up to {self.max_ts}")
-        
+        self.keys_selection_clause = ",".join(map(str, self.keys))
 
-        # log when events are sent 
-        df = pd.DataFrame({"timestamp": [], "processing_time": []})
-        self.filename = log_filename
-        df.to_csv(self.filename, index=None)
+    def prepare(self):
+        self.conn = sqlite3.connect(self.azure_database)
+        self.conn.executescript("PRAGMA journal_mode=WAL;")
+        logger.msg(f"Total number of timestamps: {len(self.all_timestamps)}")
+        logger.msg(f"Total number of keys: {len(self.keys)}")
+
+        cursor = self.conn.execute(
+            "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
+            f"int_id in ({self.keys_selection_clause})"
+        )
+        self.buffer = defaultdict(list)
+        for ts, int_id, avg_cpu in cursor:
+            self.buffer[ts].append((int_id, avg_cpu))
+        logger.msg("All keys loaded")
+
+        self.result_file = open(
+            os.path.join(self.results_dir, f"source.{os.getpid()}.jsonl"), "w"
+        )
 
     def on_event(self, _: Record) -> List[Record[SourceValue]]:
+        if self.sleep > 0:
+            time.sleep(self.sleep)
+        self.ts += 1
 
-        if self.ts >= self.max_ts: 
-            print("completed iteration", self.total_sent)
+        if self.ts >= len(self.all_timestamps):
             raise StopIteration()
-
-        else: 
-            events = []
-            for key in self.keys: 
-                events.append({"key_id": key, "value": self.data[key][self.ts]})
-            self.total_sent += len(events)
+        azure_ts = self.all_timestamps[self.ts]
+        if azure_ts not in self.buffer:
+            return
+        batch_data = self.buffer.pop(azure_ts)
 
         ingest_time = time.time()
 
-        # log timestamps 
-        df = pd.DataFrame({"timestamp": [self.ts], "processing_time": [ingest_time]})
-        df.to_csv(self.filename, mode="a", index=False, header=False)
-
-        if self.ts % 1000 == 0: 
-            print(f"Sent events {ingest_time}: {self.total_sent}")
-        self.ts += 1
-        time.sleep(self.sleep)
-        return [
+        batch = [
             Record(
                 entry=SourceValue(
-                    key_id=e["key_id"],
-                    value=e["value"],
-                    timestamp=self.ts,
+                    key_id=key_id,
+                    value=avg_cpu,
+                    seq_no=self.ts,
                     ingest_time=ingest_time,
-                ), 
-                shard_key=str(e["key_id"])
+                ),
+                shard_key=str(key_id),
             )
-            for e in events
+            for key_id, avg_cpu in batch_data
         ]
+        if len(batch) == 0:
+            return
+
+        self.result_file.write(json.dumps([i.entry.__dict__ for i in batch]))
+        self.result_file.write("\n")
+        self.result_file.flush()
+        return batch
 
 
 @dataclass
 class WindowValue:
-    key_id: str
-    value: List[int]
-    timestamp: int
-    ingest_time: float
+    key_id: int
+    values: List[float]
+    seq_nos: List[int]
+    last_ingest_time: float
+
 
 class Window(BaseTransform):
-    def __init__(self, window_size, slide_size=None) -> None:
-        self._data = defaultdict(list)
+    def __init__(self, window_size: int, slide_size: int) -> None:
+        self._data: DefaultDict[int, List[float]] = defaultdict(list)
+        self._seq_nos: DefaultDict[int, List[int]] = defaultdict(list)
         self.window_size = window_size
-        self.slide_size = window_size if slide_size is None else slide_size
+        self.slide_size = slide_size
 
+    def prepare(self):
+        logger.msg(
+            f"Working with window_size {self.window_size} slide_size {self.slide_size}"
+        )
 
-    def on_event(self, record: Record):
-        self._data[record.entry.key_id].append(record.entry.value)
+    def on_event(self, record: Record[SourceValue]) -> Optional[Record[WindowValue]]:
+        key_id = record.entry.key_id
+        self._data[key_id].append(record.entry.value)
+        self._seq_nos[key_id].append(record.entry.seq_no)
 
-        if len(self._data[record.entry.key_id]) >= self.window_size:
-            window = list(self._data[record.entry.key_id])
-            self._data[record.entry.key_id] = self._data[record.entry.key_id][
-                self.slide_size :
-            ]
-            assert (
-                len(self._data[record.entry.key_id]) == self.window_size - self.slide_size
-            ), f"List length is wrong size {len(self._data[record.entry.key_id])}"
+        if len(self._data[key_id]) >= self.window_size:
+            window = list(self._data[key_id])
+            self._data[key_id] = self._data[key_id][self.slide_size :]
+            seq_nos = list(self._seq_nos[key_id])
+            self._seq_nos[key_id] = self._seq_nos[key_id][self.slide_size :]
 
-            # return window record
-            # print("window", record.entry.key, window)
             return Record(
                 entry=WindowValue(
-                    key_id=record.entry.key_id,
-                    value=window,
-                    timestamp=record.entry.timestamp,
-                    ingest_time=record.entry.ingest_time,
-                ), 
-                shard_key=str(record.entry.key_id)
+                    key_id=key_id,
+                    values=window,
+                    seq_nos=seq_nos,
+                    last_ingest_time=record.entry.ingest_time,
+                ),
+                shard_key=str(record.entry.key_id),
             )
+        return None
+
 
 @dataclass
 class TimeSeriesValue:
-    key_id: str
+    key_id: int
     forecast: List[float]
-    timestamp: int
-    ingest_time: float
-    runtime: float
+    last_seqno: int
+    last_ingest_time: float
     processing_time: float
- 
+    y_train: List[float]
+
+
 class STLFitForecast(BaseTransform):
-
     """
-    Fit STLForecast model and forecast future points. 
+    Fit STLForecast model and forecast future points.
     """
 
-    def __init__(self, seasonality, forecast, window_size: int, data_dir: str, keys: List[int]):
-        self.seasonality = seasonality
-        self.forecast_len = forecast
+    def __init__(self, results_dir):
+        self.results_dir = results_dir
+
+    def prepare(self):
         self.data = defaultdict(lambda: None)
-        #self.data = self.init_data(data_dir, keys, window_size)
+        self.result_file = open(
+            os.path.join(self.results_dir, f"forecast.{os.getpid()}.jsonl"), "w"
+        )
 
-#    def init_data(self, data_dir, keys, window_size):
-#
-#        data = read_data(data_dir, keys, window_size)
-#        for key_id in data.keys(): 
-#            window = data[key_id].value.values[:window_size]
-#            timestamp = data[key_id].timestamp.values[window_size-1]
-#            print(timestamp)
-#            #window = [e["value"] for e in events[key_id][:window_size]]
-#            #timestamp = events[key_id][window_size-1]["timestamp_ms"]
-#            ingest_time = None
-#            record = self.fit_model(key_id, window, timestamp, ingest_time)
-#            data[key_id] = record
-#        print("Generated init data")
-#        open(f"{data_dir}/init_forecast.json", "w").write(json.dumps({key: data[key].entry.forecast for key in data.keys()}))
-#        return data
-#
-
-    def get(self, key): 
+    def get(self, key):
         return self.data[key]
 
-    def fit_model(self, key_id, window, timestamp, ingest_time):
-        st = time.time()
-        # catch warning for ML fit
+    def on_event(self, record: Record[WindowValue]):
+        key_id = record.shard_key
+
         with warnings.catch_warnings():
+            # catch warning for ML fit
             warnings.filterwarnings("ignore")
             model = STLForecast(
-                np.array(window),
-                ARIMA, 
-                model_kwargs=dict(order=(1, 1, 0), trend="t"), 
-                period=self.seasonality
-            ).fit() 
-            forecast = model.forecast(self.forecast_len)
-        runtime = time.time() - st
-        return Record(
-            entry=TimeSeriesValue(
-                key_id=key_id, 
-                forecast=forecast.tolist(),
-                timestamp=timestamp,
-                runtime=runtime,
-                ingest_time=ingest_time, 
-                processing_time=time.time(),
-            ), 
-            shard_key=str(key_id)
+                np.array(record.entry.values),
+                ARIMA,
+                model_kwargs=dict(order=(1, 1, 0), trend="t"),
+                period=12 * 24,  # 5 min timestamp interval, period of one day
+            ).fit()
+            forecast = model.forecast(9000)
+
+        forecast_record = TimeSeriesValue(
+            key_id=key_id,
+            forecast=forecast.tolist(),
+            last_seqno=record.entry.seq_nos[-1],
+            last_ingest_time=record.entry.last_ingest_time,
+            processing_time=time.time(),
+            y_train=record.entry.values,
         )
 
-    def on_event(self, record: Record):
-        result_record = self.fit_model(
-            record.entry.key_id, 
-            record.entry.value, 
-            record.entry.timestamp, 
-            record.entry.ingest_time
+        self.data[key_id] = forecast_record
+        print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
+
+        self.result_file.write(
+            json.dumps(
+                {
+                    f: forecast_record.__dict__[f]
+                    for f in [
+                        "key_id",
+                        "forecast",
+                        "last_seqno",
+                        "last_ingest_time",
+                        "processing_time",
+                    ]
+                }
+            )
         )
-        self.data[record.entry.key_id] = result_record
-        print(f"Update key {record.entry.key_id}, timestep {record.entry.timestamp}")
-        return result_record
+        self.result_file.write("\n")
+        self.result_file.flush()
+
+
+def compile_result(keys: List[KeyType]):
+    """Construct evaluation time series based on real system time"""
+    forecast_files = glob.glob(f"{FLAGS.results_dir}/forecast.*.jsonl")
+    key_to_forecast_values = defaultdict(lambda: np.zeros(12 * 24 * 30))
+    key_to_timestamp_values = defaultdict(lambda: np.zeros(12 * 24 * 30))
+    for path in forecast_files:
+        with open(path) as f:
+            for line in f:
+                loaded = json.loads(line)
+                start_idx = loaded["last_seqno"] + 1
+                key_id = loaded["key_id"]
+                forecast_values = key_to_forecast_values[key_id]
+                forecast_values[start_idx:] = np.array(loaded["forecast"])[
+                    : len(forecast_values) - start_idx
+                ]
+                key_to_timestamp_values[key_id][start_idx:] = loaded["processing_time"]
+
+    source_files = glob.glob(f"{FLAGS.results_dir}/source.*.jsonl")
+    key_to_source_series = defaultdict(list)
+    key_to_source_timestamps = defaultdict(list)
+    for path in source_files:
+        with open(path) as f:
+            for line in f:
+                loaded = json.loads(line)
+                for entry in loaded:
+                    key_id = entry["key_id"]
+                    key_to_source_series[key_id].append(entry["value"])
+                    key_to_source_timestamps[key_id].append(entry["ingest_time"])
+
+    for key in keys:
+        pred_df = pd.DataFrame(
+            {
+                "timestamp": key_to_timestamp_values[key],
+                "forecast": key_to_forecast_values[key],
+            }
+        )
+        true_df = pd.DataFrame(
+            {
+                "timestamp": key_to_source_timestamps[key],
+                "readings": key_to_source_series[key],
+            }
+        )
+
+        merged = pd.merge_asof(
+            left=pred_df, right=true_df, on="timestmap", direction="backward"
+        )
+
 
 def main(argv):
-    print("Running STL pipeline on ralf...")
+    logger.msg("Running STL pipeline on ralf...")
 
     # Setup dataset directory
-    if FLAGS.dataset == "yahoo": 
-        data_dir = use_dataset(FLAGS.experiment, download=False)
-        keys = range(1, 100, 1)
-    elif FLAGS.dataset == "azure":
-        data_dir = use_dataset(FLAGS.dataset, download=False)
-        keys = list(json.load(open(f"{data_dir}/{FLAGS.experiment}/keys.json", "r")))
-    else: 
-        raise ValueError("Invalid dataset", FLAGS.dataset)
-    print("Using data from", data_dir)
+    conn = sqlite3.connect(FLAGS.azure_database)
+    conn.executescript("PRAGMA journal_mode=WAL;")
 
-    # Setup results directory
-    results_dir = os.path.join(read_config()["results_dir"], FLAGS.experiment)
-    name = f"results_workers_{FLAGS.workers}_{FLAGS.scheduler}_window_{FLAGS.window_size}_slide_{FLAGS.slide_size}"
-    print("Making results for", results_dir)
-
-    # create results file/directory
-    if not os.path.isdir(results_dir):
-        os.mkdir(results_dir)
-    results_file = f"{results_dir}/{name}.csv"
-    timestamp_file = f"{results_dir}/{name}_timestamps.csv"
-    print("results file", results_file)
-
-    deploy_mode = "ray"
-    #deploy_mode = "local"
-    # deploy_mode = "simpy"
-    app = RalfApplication(RalfConfig(deploy_mode=deploy_mode))
-
-    # create simulation env
-    if deploy_mode == "simpy":
-        env = simpy.Environment()
+    cache_file = "query_cache.json"
+    if os.path.exists(cache_file):
+        with open(cache_file, "r") as f:
+            cache = json.load(f)
+            keys = cache["keys"]
+            all_timestamps = cache["all_timestamps"]
     else:
-        env = None
+        keys = list(
+            itertools.chain.from_iterable(
+                conn.execute("SELECT int_id FROM readings GROUP BY int_id LIMIT 5;")
+            )
+        )
+        all_timestamps = list(
+            itertools.chain.from_iterable(
+                conn.execute(
+                    "SELECT timestamp FROM readings GROUP BY timestamp ORDER BY timestamp"
+                ).fetchall()
+            )
+        )
+        with open(cache_file, "w") as f:
+            json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
+    logger.msg(f"Working with {len(keys)} keys")
 
-    # scheduler options 
+    os.makedirs(FLAGS.results_dir)
+    logger.msg(f"Results dir {FLAGS.results_dir}")
+
+    app = RalfApplication(RalfConfig(deploy_mode="ray"))
+
+    # scheduler options
     schedulers = {
-        "fifo": FIFO(),
-        "lifo": LIFO(), 
-        "ce": CumulativeErrorScheduler(keys=keys),
-        "rr": RoundRobinScheduler(keys=keys),
+        "lifo": KeyAwareLifo(),
+        "rr": RoundRobinScheduler(),
+        "ce": CumulativeErrorScheduler(),
     }
 
-    # create feature frames
-    # TODO: benchmark to figure out better processing_time values for simulation
-    window_ff = app.source(
-        DataSource(data_dir, timestamp_file, sleep=0.01, window_size=FLAGS.window_size, keys=keys, dataset=FLAGS.dataset),
+    app.source(
+        DataSource(
+            keys=keys,
+            sleep=0,
+            results_dir=FLAGS.results_dir,
+            azure_database=FLAGS.azure_database,
+            all_timestamps=all_timestamps,
+        ),
         operator_config=OperatorConfig(
-            simpy_config=SimpyOperatorConfig(
-                shared_env=env, processing_time_s=0.01, stop_after_s=10
-            ),
             ray_config=RayOperatorConfig(num_replicas=1),
         ),
     ).transform(
         Window(window_size=FLAGS.window_size, slide_size=FLAGS.slide_size),
         scheduler=FIFO(),
         operator_config=OperatorConfig(
-            simpy_config=SimpyOperatorConfig(
-                shared_env=env,
-                processing_time_s=0.01,
-            ),
             ray_config=RayOperatorConfig(num_replicas=2),
         ),
-    )
-    stl_ff = window_ff.transform(
-        STLFitForecast(seasonality=24, forecast=2000, window_size=FLAGS.window_size, data_dir=data_dir, keys=keys),
+    ).transform(
+        STLFitForecast(FLAGS.results_dir),
         scheduler=schedulers[FLAGS.scheduler],
         operator_config=OperatorConfig(
-            simpy_config=SimpyOperatorConfig(
-                shared_env=env, 
-                processing_time_s=0.2, 
-            ),         
-            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers)
-        )
-    ).transform( # write feature logs to CSV 
-        WriteFeatures(results_file, ["key_id", "forecast", "timestamp", "processing_time", "runtime", "ingest_time"])
+            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers),
+        ),
     )
 
     app.deploy()
-
-    if deploy_mode == "simpy":
-        env.run(100)
     app.wait()
 
-    query_results_file = f"{results_dir}/{name}_features.csv"
-    query_file = f"{data_dir}/queries.csv"
-
-    print(f"See results {results_file}")
-    log_results(name)
+    compile_result()
 
 
 if __name__ == "__main__":
