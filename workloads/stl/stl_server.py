@@ -2,6 +2,7 @@ import glob
 import itertools
 import json
 import os
+import pickle
 import sqlite3
 import threading
 import time
@@ -219,13 +220,19 @@ class DataSource(BaseTransform):
         logger.msg(f"Total number of timestamps: {len(self.all_timestamps)}")
         logger.msg(f"Total number of keys: {len(self.keys)}")
 
-        cursor = self.conn.execute(
-            "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
-            f"int_id in ({self.keys_selection_clause})"
-        )
-        self.buffer = defaultdict(list)
-        for ts, int_id, avg_cpu in cursor:
-            self.buffer[ts].append((int_id, avg_cpu))
+        cache_path = f"data_cache_keys_{len(self.keys)}.pkl"
+        if os.path.exists(cache_path):
+            logger.msg(f"Loading from cache {cache_path}")
+            with open(cache_path, "rb") as f:
+                self.buffer = pickle.load(f)
+        else:
+            cursor = self.conn.execute(
+                "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
+                f"int_id in ({self.keys_selection_clause})"
+            )
+            self.buffer = defaultdict(list)
+            for ts, int_id, avg_cpu in cursor:
+                self.buffer[ts].append((int_id, avg_cpu))
         logger.msg("All keys loaded")
 
         self.result_file = open(
@@ -381,52 +388,21 @@ class STLFitForecast(BaseTransform):
         self.result_file.flush()
 
 
-def compile_result(keys: List[KeyType]):
-    """Construct evaluation time series based on real system time"""
-    forecast_files = glob.glob(f"{FLAGS.results_dir}/forecast.*.jsonl")
-    key_to_forecast_values = defaultdict(lambda: np.zeros(12 * 24 * 30))
-    key_to_timestamp_values = defaultdict(lambda: np.zeros(12 * 24 * 30))
-    for path in forecast_files:
-        with open(path) as f:
-            for line in f:
-                loaded = json.loads(line)
-                start_idx = loaded["last_seqno"] + 1
-                key_id = loaded["key_id"]
-                forecast_values = key_to_forecast_values[key_id]
-                forecast_values[start_idx:] = np.array(loaded["forecast"])[
-                    : len(forecast_values) - start_idx
-                ]
-                key_to_timestamp_values[key_id][start_idx:] = loaded["processing_time"]
+def _get_config() -> Dict:
+    """Return all the flag vlaue defined here."""
+    return {f.name: f.value for f in FLAGS.get_flags_for_module("__main__")}
 
-    source_files = glob.glob(f"{FLAGS.results_dir}/source.*.jsonl")
-    key_to_source_series = defaultdict(list)
-    key_to_source_timestamps = defaultdict(list)
-    for path in source_files:
-        with open(path) as f:
-            for line in f:
-                loaded = json.loads(line)
-                for entry in loaded:
-                    key_id = entry["key_id"]
-                    key_to_source_series[key_id].append(entry["value"])
-                    key_to_source_timestamps[key_id].append(entry["ingest_time"])
 
-    for key in keys:
-        pred_df = pd.DataFrame(
-            {
-                "timestamp": key_to_timestamp_values[key],
-                "forecast": key_to_forecast_values[key],
-            }
-        )
-        true_df = pd.DataFrame(
-            {
-                "timestamp": key_to_source_timestamps[key],
-                "readings": key_to_source_series[key],
-            }
-        )
+flags.DEFINE_integer(
+    "num_keys", default=None, required=True, help="limit number of keys"
+)
 
-        merged = pd.merge_asof(
-            left=pred_df, right=true_df, on="timestmap", direction="backward"
-        )
+flags.DEFINE_float(
+    "source_sleep_per_batch",
+    default=None,
+    required=True,
+    help="source sleep duration in s",
+)
 
 
 def main(argv):
@@ -436,16 +412,20 @@ def main(argv):
     conn = sqlite3.connect(FLAGS.azure_database)
     conn.executescript("PRAGMA journal_mode=WAL;")
 
-    cache_file = "query_cache.json"
+    num_keys = FLAGS.num_keys
+    cache_file = f"query_cache_{num_keys}.json"
     if os.path.exists(cache_file):
         with open(cache_file, "r") as f:
             cache = json.load(f)
             keys = cache["keys"]
             all_timestamps = cache["all_timestamps"]
     else:
+        logger.msg(f"Genering query cache for num_keys={num_keys}")
         keys = list(
             itertools.chain.from_iterable(
-                conn.execute("SELECT int_id FROM readings GROUP BY int_id LIMIT 5;")
+                conn.execute(
+                    f"SELECT int_id FROM readings GROUP BY int_id LIMIT {num_keys};"
+                )
             )
         )
         all_timestamps = list(
@@ -460,9 +440,14 @@ def main(argv):
     logger.msg(f"Working with {len(keys)} keys")
 
     os.makedirs(FLAGS.results_dir)
+    os.makedirs(f"{FLAGS.results_dir}/metrics")
     logger.msg(f"Results dir {FLAGS.results_dir}")
+    with open(f"{FLAGS.results_dir}/config.json", "w") as f:
+        json.dump(_get_config(), f)
 
-    app = RalfApplication(RalfConfig(deploy_mode="ray"))
+    app = RalfApplication(
+        RalfConfig(deploy_mode="ray", metrics_dir=f"{FLAGS.results_dir}/metrics")
+    )
 
     # scheduler options
     schedulers = {
@@ -474,7 +459,7 @@ def main(argv):
     app.source(
         DataSource(
             keys=keys,
-            sleep=0,
+            sleep=FLAGS.source_sleep_per_batch,
             results_dir=FLAGS.results_dir,
             azure_database=FLAGS.azure_database,
             all_timestamps=all_timestamps,
@@ -486,7 +471,7 @@ def main(argv):
         Window(window_size=FLAGS.window_size, slide_size=FLAGS.slide_size),
         scheduler=FIFO(),
         operator_config=OperatorConfig(
-            ray_config=RayOperatorConfig(num_replicas=2),
+            ray_config=RayOperatorConfig(num_replicas=FLAGS.workers),
         ),
     ).transform(
         STLFitForecast(FLAGS.results_dir),
@@ -498,8 +483,6 @@ def main(argv):
 
     app.deploy()
     app.wait()
-
-    compile_result()
 
 
 if __name__ == "__main__":
