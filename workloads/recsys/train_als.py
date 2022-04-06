@@ -142,8 +142,8 @@ if __name__ == "__main__":
     
     pickle.dump(ratings, open(f"{result_dir}/ratings.pkl", "wb"))
     # store past updates 
-    past_updates = {uid: ratings.getrow(uid).size for uid in uids}
-    pickle.dump(past_updates, open(f"{result_dir}/past_updates.pkl", "wb"))
+    #past_updates = {uid: ratings.getrow(uid).size for uid in uids}
+    #pickle.dump(past_updates, open(f"{result_dir}/past_updates.pkl", "wb"))
     
     
     max_iter = 50
