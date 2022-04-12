@@ -121,7 +121,10 @@ class BasePriorityScheduler(BaseScheduler):
                 self.sorted_keys_by_timestamp.remove(record_key)
 
             # Update priority
-            self.key_to_priority[record_key] = self.compute_priority(record)
+            if record_key in self.key_to_priority: 
+                self.key_to_priority[record_key] = self.compute_priority(record)
+            else: # max priority if not seen before
+                self.key_to_priority[record_key] = self.max_prio
 
             self.sorted_keys_by_timestamp.add(record_key)
             print("add", record_key)
@@ -180,6 +183,7 @@ class RoundRobinScheduler(BasePriorityScheduler):
 class CumulativeErrorScheduler(BasePriorityScheduler):
     """Prioritize the key that has highest prediction error so far"""
 
+    max_prio = 1000000000
 
     def __init__(self, epsilon = None):
         # TODO: bring back the logic that temporarily disable a key if it is pending update
@@ -227,14 +231,14 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
         ) * len(y_true)
-
-        print(record.shard_key, "Marginal error", error, forecast_indicies.max() - start, len(y_true), self.key_to_priority.get(record.shard_key, 0))
-
-        if self.epsilon is not None:
-            error = max(error, self.epsilon) # minimum error 
-
-        # add to current error
-        return self.key_to_priority.get(record.shard_key, 0) + error
+   
+        if self.epsilon is not None: 
+            # return max of adding epsilon or returning ASE
+            return max(
+                self.key_to_priority.get(record.shard_key, 0) + self.epsilon, # add epsilon each time
+                error
+            )
+        return error
 
 
 @dataclass
