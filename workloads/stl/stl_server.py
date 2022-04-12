@@ -73,12 +73,20 @@ flags.DEFINE_string(
     required=False,
 )
 
+flags.DEFINE_float(
+    "epsilon",
+    default=None,
+    help="Default error to add to each time a query is made",
+    required=False,
+)
+
 KeyType = int
 
 
 class BasePriorityScheduler(BaseScheduler):
     def __init__(self):
         self.key_to_event: Dict[KeyType, Record] = dict()
+        # set initial priority scores to infinity
         self.key_to_priority: Dict[KeyType, float] = dict()
         self.sorted_keys_by_timestamp = SortedSet(
             key=lambda key: self.key_to_priority[key]
@@ -109,7 +117,13 @@ class BasePriorityScheduler(BaseScheduler):
             # Remove the key so we can recompute sort key
             if record_key in self.sorted_keys_by_timestamp:
                 self.sorted_keys_by_timestamp.remove(record_key)
-            self.key_to_priority[record_key] = self.compute_priority(record)
+
+            # Update priority
+            if record_key in self.key_to_priority: 
+                self.key_to_priority[record_key] = self.compute_priority(record)
+            else: # max priority if not seen before
+                self.key_to_priority[record_key] = self.max_prio
+
             self.sorted_keys_by_timestamp.add(record_key)
         self.wake_waiter_if_needed()
 
@@ -146,14 +160,15 @@ class RoundRobinScheduler(BasePriorityScheduler):
 class CumulativeErrorScheduler(BasePriorityScheduler):
     """Prioritize the key that has highest prediction error so far"""
 
-    max_prio = 10000000
+    max_prio = 1000000000
 
-    def __init__(self):
+    def __init__(self, epsilon = None):
         # TODO: bring back the logic that temporarily disable a key if it is pending update
         # If that ever becomes an issue.
         # self.pending_updates: Dict[KeyType, float] = []
 
         super().__init__()
+        self.epsilon = epsilon
 
     def compute_priority(self, record: Record["WindowValue"]) -> float:
         assert isinstance(record.entry, WindowValue)
@@ -181,7 +196,14 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         # TODO: maybe scale this by staleness
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
-        )
+        ) * len(y_true)
+    
+        if self.epsilon is not None: 
+            # return max of adding epsilon or returning ASE
+            return max(
+                self.key_to_priority.get(record.shard_key, 0) + self.epsilon, # add epsilon each time
+                error
+            )
         return error
 
 
@@ -267,6 +289,8 @@ class DataSource(BaseTransform):
         ]
         if len(batch) == 0:
             return
+
+        #print(f"Sending {len(batch)} rows at {self.ts} at {ingest_time}")
 
         self.result_file.write(json.dumps([i.entry.__dict__ for i in batch]))
         self.result_file.write("\n")
@@ -407,6 +431,7 @@ flags.DEFINE_float(
 
 def main(argv):
     logger.msg("Running STL pipeline on ralf...")
+    print("Results", f"{FLAGS.results_dir}/metrics")
 
     # Setup dataset directory
     conn = sqlite3.connect(FLAGS.azure_database)
@@ -453,7 +478,7 @@ def main(argv):
     schedulers = {
         "lifo": KeyAwareLifo(),
         "rr": RoundRobinScheduler(),
-        "ce": CumulativeErrorScheduler(),
+        "ce": CumulativeErrorScheduler(FLAGS.epsilon),
     }
 
     app.source(
@@ -483,6 +508,7 @@ def main(argv):
 
     app.deploy()
     app.wait()
+    print("Finished", FLAGS.results_dir)
 
 
 if __name__ == "__main__":
