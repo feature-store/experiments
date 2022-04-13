@@ -100,20 +100,26 @@ def loss(ratings):
     return mean_squared_error(y_true, y_pred)
     
 
-def predict_user_movie_rating(user_feature, movie_feature):
-    return user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+
+
+def predict_user_movie_rating(user_feature, movie_feature, d=50):
+    p = user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    if p < 1: p = 1
+    if p > 5: p = 5
+    return p 
+
 
 if __name__ == "__main__":
 
-    dataset_dir = use_dataset("ml-25m")
-    result_dir = use_results("ml-25m")
+    dataset_dir = use_dataset("ml-1m")
+    result_dir = use_results("ml-1m")
     workers = 40
 
     ratings_path = f"{dataset_dir}/ratings.csv"
     ratings_df = pd.read_csv(ratings_path)
     ratings_df.columns = ['user_id', 'movie_id', 'rating', 'timestamp']
     
-    start_ts, med_ts, end_ts = split_data(0.75, ratings_df)
+    start_ts, med_ts, end_ts = split_data(0.5, ratings_df)
     train_df = pd.read_csv(f'{dataset_dir}/train.csv')
     test_df = pd.read_csv(f'{dataset_dir}/stream.csv')
     
@@ -142,8 +148,8 @@ if __name__ == "__main__":
     
     pickle.dump(ratings, open(f"{result_dir}/ratings.pkl", "wb"))
     # store past updates 
-    #past_updates = {uid: ratings.getrow(uid).size for uid in uids}
-    #pickle.dump(past_updates, open(f"{result_dir}/past_updates.pkl", "wb"))
+    past_updates = {uid: ratings.getrow(uid).size for uid in uids}
+    pickle.dump(past_updates, open(f"{result_dir}/past_updates.pkl", "wb"))
     
     
     max_iter = 50
@@ -170,7 +176,7 @@ if __name__ == "__main__":
             movie_features[mid] = f.result()
         print("loss", loss(ratings))
         
-    pickle.dump(user_features, open(f"{result_dir}/train_user_features.pkl", "wb"))
-    pickle.dump(movie_features, open(f"{result_dir}/train_movie_features.pkl", "wb"))
+        pickle.dump(user_features, open(f"{result_dir}/train_user_features.pkl", "wb"))
+        pickle.dump(movie_features, open(f"{result_dir}/train_movie_features.pkl", "wb"))
 
 

@@ -56,7 +56,10 @@ def loss(ratings):
     
 
 def predict_user_movie_rating(user_feature, movie_feature, d=50):
-    return user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    p = user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    if p < 1: p = 1
+    if p > 5: p = 5
+    return p 
 
 class UserEventQueue: 
     
