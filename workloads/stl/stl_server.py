@@ -73,20 +73,12 @@ flags.DEFINE_string(
     required=False,
 )
 
-flags.DEFINE_float(
-    "epsilon",
-    default=None,
-    help="Default error to add to each time a query is made",
-    required=False,
-)
-
 KeyType = int
 
 
 class BasePriorityScheduler(BaseScheduler):
     def __init__(self):
         self.key_to_event: Dict[KeyType, Record] = dict()
-        # set initial priority scores to infinity
         self.key_to_priority: Dict[KeyType, float] = dict()
         self.sorted_keys_by_timestamp = SortedSet(
             key=lambda key: self.key_to_priority[key]
@@ -94,8 +86,6 @@ class BasePriorityScheduler(BaseScheduler):
         self.waker: Optional[threading.Event] = None
         self.stop_iteration = None
         self._writer_lock = None
-
-        self.max_prio = 100000000000
 
     @property
     def writer_lock(self):
@@ -119,12 +109,8 @@ class BasePriorityScheduler(BaseScheduler):
             # Remove the key so we can recompute sort key
             if record_key in self.sorted_keys_by_timestamp:
                 self.sorted_keys_by_timestamp.remove(record_key)
-
-            # Update priority
             self.key_to_priority[record_key] = self.compute_priority(record)
-
             self.sorted_keys_by_timestamp.add(record_key)
-            print("add", record_key)
         self.wake_waiter_if_needed()
 
     def pop_event(self) -> Record:
@@ -134,14 +120,9 @@ class BasePriorityScheduler(BaseScheduler):
         with self.writer_lock:
             if len(self.key_to_event) == 0:
                 return Record.make_wait_event(self.new_waker())
-
-            print(len(self.key_to_event), len(self.sorted_keys_by_timestamp))
             latest_key = self.sorted_keys_by_timestamp.pop()
             record = self.key_to_event.pop(latest_key)
-            prio = self.key_to_priority.pop(latest_key)
-            #self.key_to_priority[latest_key] = 0
-            if self.qsize() == 0: 
-                logger.msg(f"Queue size is zero - system not fully utilized")
+            self.key_to_priority.pop(latest_key)
         return record
 
     def qsize(self) -> int:
@@ -152,13 +133,6 @@ class KeyAwareLifo(BasePriorityScheduler):
     """Always prioritize the latest record by arrival time."""
 
     def compute_priority(self, _: Record) -> float:
-        feature: Record[TimeSeriesValue] = self._operator.get(record.shard_key)
-        if feature is None:
-            logger.msg(
-                f"Missing feature for key {record.shard_key}, returning max_prio"
-            )
-            return self.max_prio
-
         return time.time()
 
 
@@ -166,40 +140,24 @@ class RoundRobinScheduler(BasePriorityScheduler):
     """Prioritize the key that hasn't been updated for longest."""
 
     def compute_priority(self, record: Record) -> float:
-        feature: Record[TimeSeriesValue] = self._operator.get(record.shard_key)
-        if feature is None:
-            logger.msg(
-                f"Missing feature for key {record.shard_key}, returning max_prio"
-            )
-            return self.max_prio
-
-
         return self.key_to_priority.get(record.shard_key, 0) + 1
 
 
 class CumulativeErrorScheduler(BasePriorityScheduler):
     """Prioritize the key that has highest prediction error so far"""
 
+    max_prio = 10000000
 
-    def __init__(self, epsilon = None):
+    def __init__(self):
         # TODO: bring back the logic that temporarily disable a key if it is pending update
         # If that ever becomes an issue.
         # self.pending_updates: Dict[KeyType, float] = []
 
         super().__init__()
-        self.epsilon = epsilon
-        self.last_seqno = {}
 
     def compute_priority(self, record: Record["WindowValue"]) -> float:
         assert isinstance(record.entry, WindowValue)
 
-        # start from last seen seqno
-        start = self.last_seqno.get(record.shard_key, -1)
-        incoming_seqnos = np.array([n for n in record.entry.seq_nos if n > start])
-        self.last_seqno[record.shard_key] = incoming_seqnos.max()
-        #print("length", incoming_seqnos.shape, start)
-
-        # lookup current feature
         feature: Record[TimeSeriesValue] = self._operator.get(record.shard_key)
         if feature is None:
             logger.msg(
@@ -207,7 +165,7 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
             )
             return self.max_prio
 
-
+        incoming_seqnos = np.array(record.entry.seq_nos)
         forecast = np.array(feature.forecast)
         window_last_seqno = feature.last_seqno
         forecast_indicies = incoming_seqnos - window_last_seqno - 1
@@ -219,22 +177,12 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         y_pred = np.take(forecast, forecast_indicies)
         y_train = np.array(feature.y_train)
 
-        assert len(record.entry.seq_nos) == 864, f"Unexpected length {len(record.entry.seq_nos)}"
-        assert len(y_true) % 288 == 0, f"Unexpected length {len(y_true)}"
-
         # TODO: sample if too heavy weight
         # TODO: maybe scale this by staleness
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
-        ) * len(y_true)
-
-        print(record.shard_key, "Marginal error", error, forecast_indicies.max() - start, len(y_true), self.key_to_priority.get(record.shard_key, 0))
-
-        if self.epsilon is not None:
-            error = max(error, self.epsilon) # minimum error 
-
-        # add to current error
-        return self.key_to_priority.get(record.shard_key, 0) + error
+        )
+        return error
 
 
 @dataclass
@@ -320,8 +268,6 @@ class DataSource(BaseTransform):
         if len(batch) == 0:
             return
 
-        #print(f"Sending {len(batch)} rows at {self.ts} at {ingest_time}")
-
         self.result_file.write(json.dumps([i.entry.__dict__ for i in batch]))
         self.result_file.write("\n")
         self.result_file.flush()
@@ -388,8 +334,6 @@ class STLFitForecast(BaseTransform):
 
     def __init__(self, results_dir):
         self.results_dir = results_dir
-        self.start_time = None
-        self.num_updates = 0
 
     def prepare(self):
         self.data = defaultdict(lambda: None)
@@ -403,8 +347,6 @@ class STLFitForecast(BaseTransform):
     def on_event(self, record: Record[WindowValue]):
         key_id = record.shard_key
 
-        if self.start_time is None: self.start_time = time.time()
-
         with warnings.catch_warnings():
             # catch warning for ML fit
             warnings.filterwarnings("ignore")
@@ -415,9 +357,6 @@ class STLFitForecast(BaseTransform):
                 period=12 * 24,  # 5 min timestamp interval, period of one day
             ).fit()
             forecast = model.forecast(9000)
-
-        self.num_updates += 1
-        print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
 
         forecast_record = TimeSeriesValue(
             key_id=key_id,
@@ -468,7 +407,6 @@ flags.DEFINE_float(
 
 def main(argv):
     logger.msg("Running STL pipeline on ralf...")
-    print("Results", f"{FLAGS.results_dir}/metrics")
 
     # Setup dataset directory
     conn = sqlite3.connect(FLAGS.azure_database)
@@ -515,7 +453,7 @@ def main(argv):
     schedulers = {
         "lifo": KeyAwareLifo(),
         "rr": RoundRobinScheduler(),
-        "ce": CumulativeErrorScheduler(FLAGS.epsilon),
+        "ce": CumulativeErrorScheduler(),
     }
 
     app.source(
@@ -545,7 +483,6 @@ def main(argv):
 
     app.deploy()
     app.wait()
-    print("Finished", FLAGS.results_dir)
 
 
 if __name__ == "__main__":
