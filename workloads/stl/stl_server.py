@@ -121,10 +121,7 @@ class BasePriorityScheduler(BaseScheduler):
                 self.sorted_keys_by_timestamp.remove(record_key)
 
             # Update priority
-            if record_key in self.key_to_priority: 
-                self.key_to_priority[record_key] = self.compute_priority(record)
-            else: # max priority if not seen before
-                self.key_to_priority[record_key] = self.max_prio
+            self.key_to_priority[record_key] = self.compute_priority(record)
 
             self.sorted_keys_by_timestamp.add(record_key)
             print("add", record_key)
@@ -183,7 +180,6 @@ class RoundRobinScheduler(BasePriorityScheduler):
 class CumulativeErrorScheduler(BasePriorityScheduler):
     """Prioritize the key that has highest prediction error so far"""
 
-    max_prio = 1000000000
 
     def __init__(self, epsilon = None):
         # TODO: bring back the logic that temporarily disable a key if it is pending update
@@ -239,7 +235,6 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
                 error
             )
         return error
-
 
 @dataclass
 class SourceValue:
