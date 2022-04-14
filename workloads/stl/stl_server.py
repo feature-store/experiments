@@ -127,6 +127,7 @@ class BasePriorityScheduler(BaseScheduler):
             self.key_to_priority[record_key] = self.compute_priority(record)
 
             self.sorted_keys_by_timestamp.add(record_key)
+            print("add", record_key)
         self.wake_waiter_if_needed()
 
     def pop_event(self) -> Record:
@@ -148,7 +149,6 @@ class BasePriorityScheduler(BaseScheduler):
             #self.key_to_priority[latest_key] = 0
             if self.qsize() == 0: 
                 logger.msg(f"Queue size is zero - system not fully utilized")
-            logger.msg(f"Number of keys {len(list(self.keys))}")
         return record
 
     def qsize(self) -> int:
