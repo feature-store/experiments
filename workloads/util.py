@@ -11,7 +11,7 @@ from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Reco
 def read_config(): 
     config = configparser.ConfigParser()
     # TODO: change
-    config.read("/home/eecs/wooders/experiments/config.yml")
+    config.read("config.yml")
     return { 
         "results_dir": config["default"]["results_dir"], 
         "dataset_dir": config["default"]["dataset_dir"], 

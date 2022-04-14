@@ -68,7 +68,7 @@ flags.DEFINE_string(
 
 flags.DEFINE_string(
     "results_dir",
-    default=f"results/{int(time.time())}",
+    default=f"results/stl/results/{int(time.time())}",
     help="Diretory to write result jsonl to",
     required=False,
 )
@@ -97,6 +97,8 @@ class BasePriorityScheduler(BaseScheduler):
 
         self.max_prio = 100000000000
 
+        self.keys = set([])
+
     @property
     def writer_lock(self):
         if self._writer_lock is None:
@@ -114,6 +116,7 @@ class BasePriorityScheduler(BaseScheduler):
             return
 
         record_key = record.shard_key
+        self.keys.add(record_key)
         with self.writer_lock:
             self.key_to_event[record_key] = record
             # Remove the key so we can recompute sort key
@@ -124,7 +127,6 @@ class BasePriorityScheduler(BaseScheduler):
             self.key_to_priority[record_key] = self.compute_priority(record)
 
             self.sorted_keys_by_timestamp.add(record_key)
-            print("add", record_key)
         self.wake_waiter_if_needed()
 
     def pop_event(self) -> Record:
@@ -133,15 +135,20 @@ class BasePriorityScheduler(BaseScheduler):
 
         with self.writer_lock:
             if len(self.key_to_event) == 0:
+                #logger.msg(f"Queue size is zero - system not fully utilized")
                 return Record.make_wait_event(self.new_waker())
 
-            print(len(self.key_to_event), len(self.sorted_keys_by_timestamp))
+            if len(self.sorted_keys_by_timestamp)  == 0: 
+                print("WHY IS LIST EMPTY??")
+                print(self.key_to_event)
+                print(self.sorted_keys_by_timestamp)
             latest_key = self.sorted_keys_by_timestamp.pop()
             record = self.key_to_event.pop(latest_key)
             prio = self.key_to_priority.pop(latest_key)
             #self.key_to_priority[latest_key] = 0
             if self.qsize() == 0: 
                 logger.msg(f"Queue size is zero - system not fully utilized")
+            logger.msg(f"Number of keys {len(list(self.keys))}")
         return record
 
     def qsize(self) -> int:
@@ -220,7 +227,7 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         y_train = np.array(feature.y_train)
 
         assert len(record.entry.seq_nos) == 864, f"Unexpected length {len(record.entry.seq_nos)}"
-        assert len(y_true) % 288 == 0, f"Unexpected length {len(y_true)}"
+        #assert len(y_true) % 288 == 0, f"Unexpected length {len(y_true)}"
 
         # TODO: sample if too heavy weight
         # TODO: maybe scale this by staleness
@@ -228,7 +235,7 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
             y_true=y_true, y_pred=y_pred, y_train=y_train
         ) * len(y_true)
 
-        print(record.shard_key, "Marginal error", error, forecast_indicies.max() - start, len(y_true), self.key_to_priority.get(record.shard_key, 0))
+        #print(record.shard_key, "Marginal error", error, forecast_indicies.max() - start, len(y_true), self.key_to_priority.get(record.shard_key, 0))
 
         if self.epsilon is not None:
             error = max(error, self.epsilon) # minimum error 
@@ -359,6 +366,8 @@ class Window(BaseTransform):
             seq_nos = list(self._seq_nos[key_id])
             self._seq_nos[key_id] = self._seq_nos[key_id][self.slide_size :]
 
+            assert len(window) == self.window_size, f"Invalid window length {window}"
+
             return Record(
                 entry=WindowValue(
                     key_id=key_id,
@@ -417,7 +426,8 @@ class STLFitForecast(BaseTransform):
             forecast = model.forecast(9000)
 
         self.num_updates += 1
-        print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
+        if self.num_updates % 1000:
+            print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
 
         forecast_record = TimeSeriesValue(
             key_id=key_id,
@@ -429,7 +439,7 @@ class STLFitForecast(BaseTransform):
         )
 
         self.data[key_id] = forecast_record
-        print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
+        #print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
 
         self.result_file.write(
             json.dumps(
