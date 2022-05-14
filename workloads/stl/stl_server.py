@@ -250,7 +250,6 @@ class SourceValue:
     seq_no: int
     ingest_time: float
 
-
 class DataSource(BaseTransform):
     """Generate event data over keys"""
 
@@ -284,6 +283,7 @@ class DataSource(BaseTransform):
             with open(cache_path, "rb") as f:
                 self.buffer = pickle.load(f)
         else:
+            logger.msg(f"Generating fresh cache {cache_path}")
             cursor = self.conn.execute(
                 "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
                 f"int_id in ({self.keys_selection_clause})"
@@ -291,7 +291,10 @@ class DataSource(BaseTransform):
             self.buffer = defaultdict(list)
             for ts, int_id, avg_cpu in cursor:
                 self.buffer[ts].append((int_id, avg_cpu))
+            with open(cache_path, "wb") as f:
+                pickle.dump(self.buffer, f)
         logger.msg("All keys loaded")
+        logger.msg(f"Num timestamps in self.buffer {len(self.buffer)}")
 
         self.result_file = open(
             os.path.join(self.results_dir, f"source.{os.getpid()}.jsonl"), "w"
@@ -348,6 +351,7 @@ class Window(BaseTransform):
         self._seq_nos: DefaultDict[int, List[int]] = defaultdict(list)
         self.window_size = window_size
         self.slide_size = slide_size
+        self.st = defaultdict(lambda: 0)
 
     def prepare(self):
         logger.msg(
@@ -360,6 +364,9 @@ class Window(BaseTransform):
         self._seq_nos[key_id].append(record.entry.seq_no)
 
         if len(self._data[key_id]) >= self.window_size:
+            #print("window time", time.time() - st[key_id])
+            self.st[key_id] = time.time()
+
             window = list(self._data[key_id])
             self._data[key_id] = self._data[key_id][self.slide_size :]
             seq_nos = list(self._seq_nos[key_id])
@@ -416,6 +423,7 @@ class STLFitForecast(BaseTransform):
         with warnings.catch_warnings():
             # catch warning for ML fit
             warnings.filterwarnings("ignore")
+            st = time.time()
             model = STLForecast(
                 np.array(record.entry.values),
                 ARIMA,
@@ -423,6 +431,7 @@ class STLFitForecast(BaseTransform):
                 period=12 * 24,  # 5 min timestamp interval, period of one day
             ).fit()
             forecast = model.forecast(9000)
+            print("runtime", time.time() - st)
 
         self.num_updates += 1
         if self.num_updates % 1000:
