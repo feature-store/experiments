@@ -23,8 +23,9 @@ from ralf.v2 import (
     RalfApplication,
     RalfConfig,
     Record,
+    KinesisDataSource
 )
-from ralf.v2.operator import OperatorConfig, RayOperatorConfig
+from ralf.v2.operator.operator import OperatorConfig, RayOperatorConfig
 from ralf.v2.utils import get_logger
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
@@ -245,9 +246,11 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
 
 @dataclass
 class SourceValue:
-    key_id: int
-    value: float
-    seq_no: int
+    key: int
+    max_cpu: float
+    min_cpu: float
+    avg_cpu: float
+    timestamp: int
     ingest_time: float
 
 class DataSource(BaseTransform):
@@ -359,9 +362,9 @@ class Window(BaseTransform):
         )
 
     def on_event(self, record: Record[SourceValue]) -> Optional[Record[WindowValue]]:
-        key_id = record.entry.key_id
-        self._data[key_id].append(record.entry.value)
-        self._seq_nos[key_id].append(record.entry.seq_no)
+        key_id = record.entry.key
+        self._data[key_id].append(record.entry.avg_cpu)
+        self._seq_nos[key_id].append(record.entry.timestamp)
 
         if len(self._data[key_id]) >= self.window_size:
             #print("window time", time.time() - st[key_id])
@@ -381,7 +384,7 @@ class Window(BaseTransform):
                     seq_nos=seq_nos,
                     last_ingest_time=record.entry.ingest_time,
                 ),
-                shard_key=str(record.entry.key_id),
+                shard_key=str(record.entry.key),
             )
         return None
 
@@ -489,35 +492,35 @@ def main(argv):
     print("Results", f"{FLAGS.results_dir}/metrics")
 
     # Setup dataset directory
-    conn = sqlite3.connect(FLAGS.azure_database)
-    conn.executescript("PRAGMA journal_mode=WAL;")
+    #conn = sqlite3.connect(FLAGS.azure_database)
+    #conn.executescript("PRAGMA journal_mode=WAL;")
 
-    num_keys = FLAGS.num_keys
-    cache_file = f"query_cache_{num_keys}.json"
-    if os.path.exists(cache_file):
-        with open(cache_file, "r") as f:
-            cache = json.load(f)
-            keys = cache["keys"]
-            all_timestamps = cache["all_timestamps"]
-    else:
-        logger.msg(f"Genering query cache for num_keys={num_keys}")
-        keys = list(
-            itertools.chain.from_iterable(
-                conn.execute(
-                    f"SELECT int_id FROM readings GROUP BY int_id LIMIT {num_keys};"
-                )
-            )
-        )
-        all_timestamps = list(
-            itertools.chain.from_iterable(
-                conn.execute(
-                    "SELECT timestamp FROM readings GROUP BY timestamp ORDER BY timestamp"
-                ).fetchall()
-            )
-        )
-        with open(cache_file, "w") as f:
-            json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
-    logger.msg(f"Working with {len(keys)} keys")
+    #num_keys = FLAGS.num_keys
+    #cache_file = f"query_cache_{num_keys}.json"
+    #if os.path.exists(cache_file):
+    #    with open(cache_file, "r") as f:
+    #        cache = json.load(f)
+    #        keys = cache["keys"]
+    #        all_timestamps = cache["all_timestamps"]
+    #else:
+    #    logger.msg(f"Genering query cache for num_keys={num_keys}")
+    #    keys = list(
+    #        itertools.chain.from_iterable(
+    #            conn.execute(
+    #                f"SELECT int_id FROM readings GROUP BY int_id LIMIT {num_keys};"
+    #            )
+    #        )
+    #    )
+    #    all_timestamps = list(
+    #        itertools.chain.from_iterable(
+    #            conn.execute(
+    #                "SELECT timestamp FROM readings GROUP BY timestamp ORDER BY timestamp"
+    #            ).fetchall()
+    #        )
+    #    )
+    #    with open(cache_file, "w") as f:
+    #        json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
+    #logger.msg(f"Working with {len(keys)} keys")
 
     os.makedirs(FLAGS.results_dir)
     os.makedirs(f"{FLAGS.results_dir}/metrics")
@@ -536,14 +539,19 @@ def main(argv):
         "ce": CumulativeErrorScheduler(FLAGS.epsilon),
     }
 
+    num_shards = 250
+    stream_arn = "arn:aws:kinesis:us-west-2:367027304074:stream/ralf-stream"
+    stream_name = "ralf-stream"
+
     app.source(
-        DataSource(
-            keys=keys,
-            sleep=FLAGS.source_sleep_per_batch,
-            results_dir=FLAGS.results_dir,
-            azure_database=FLAGS.azure_database,
-            all_timestamps=all_timestamps,
-        ),
+        #DataSource(
+        #    keys=keys,
+        #    sleep=FLAGS.source_sleep_per_batch,
+        #    results_dir=FLAGS.results_dir,
+        #    azure_database=FLAGS.azure_database,
+        #    all_timestamps=all_timestamps,
+        #),
+        KinesisDataSource(stream_name, stream_arn, num_shards, shard_key="key", data_class=SourceValue),
         operator_config=OperatorConfig(
             ray_config=RayOperatorConfig(num_replicas=1),
         ),

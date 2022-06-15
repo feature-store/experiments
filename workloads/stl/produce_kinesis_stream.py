@@ -232,6 +232,7 @@ if __name__ == "__main__":
     num_shards = resource_config["kinesis_shard_count"]["value"]
 
     print("STREAM", stream_name)
+    print("shards", num_shards)
     print(stream_arn)
 
     data_dir = "/home/ubuntu/workspace/experiments/datasets/azure"
