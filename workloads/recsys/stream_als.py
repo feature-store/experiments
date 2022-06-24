@@ -4,9 +4,8 @@ from scipy.sparse import coo_matrix
 from scipy.sparse import dok_matrix
 from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.metrics import mean_squared_error
-from pyspark.sql import SparkSession
-from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.recommendation import ALS
+
+import time
 
 from sklearn.metrics import mean_squared_error
 
@@ -75,6 +74,7 @@ class UserEventQueue:
         self.past_updates = past_updates
         self.queue = defaultdict(list)
         self.staleness = defaultdict(lambda: 0)
+        self.last_key = defaultdict(lambda: 0)
         
     def push(self, uid, mid, rating, user_features, movie_features): 
         
@@ -88,6 +88,9 @@ class UserEventQueue:
             # update per key 
             self.total_error[uid] += error
         self.queue[uid].append((uid, mid, rating))
+
+        # TODO: try moving existing keys to front? 
+        self.last_key[uid] = time.time()
         
     def arg_max(self, data_dict): 
         max_key = None
@@ -111,6 +114,8 @@ class UserEventQueue:
     def choose_key(self): 
         if self.policy == "total_error_cold" or self.policy == "total_error":
             key = self.arg_max(self.total_error)
+        elif self.policy == "last_query":
+            key = self.arg_max(self.last_key)
         elif self.policy == "max_pending":
             key = self.arg_max({key: len(self.queue[key]) for key in self.queue.keys()})
         elif self.policy == "min_past": 
@@ -143,13 +148,13 @@ class UserEventQueue:
             
         return key 
 
-def experiment(policy, updates_per_ts, dataset_dir=".", result_dir=".", limit=None, d=50): 
+def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50): 
 
     # read data 
     test_df = pd.read_csv(f'{dataset_dir}/stream.csv')
     train_df = pd.read_csv(f'{dataset_dir}/train.csv')
     start_ts = test_df.timestamp.min()
-    test_df.timestamp = test_df.timestamp.apply(lambda ts: int((ts - start_ts)/100))
+    test_df.timestamp = test_df.timestamp.apply(lambda ts: int((ts - start_ts)/ts_factor))
     data = {}
     for ts, group in tqdm(test_df.groupby("timestamp")):
         data[ts] = group.to_dict("records")
@@ -177,7 +182,8 @@ def experiment(policy, updates_per_ts, dataset_dir=".", result_dir=".", limit=No
         limit = len(list(data.keys()))
 
     queue = UserEventQueue(user_features.shape[0], policy, past_updates) 
-    for ts in tqdm(list(data.keys())[:limit]): 
+    #for ts in tqdm(list(data.keys())[:limit]): 
+    for ts in list(data.keys())[:limit]: 
 
         # process events
         updated_users = set([])
@@ -206,7 +212,21 @@ def experiment(policy, updates_per_ts, dataset_dir=".", result_dir=".", limit=No
             #print("update", uid)
             
             # TODO: make sure overall loss is decreasing (training error)
-        
+
+        if ts % 1000 == 0:
+            runtime = 1/updates_per_ts
+            update_df = pd.DataFrame([
+                [policy, runtime, k, i, update_times[k][i]]
+                for k, v in update_times.items() for i in range(len(v))
+            ], columns = ["policy", "runtime", "key", "i", "time"])
+            results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
+    
+
+            print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_results.csv")
+            update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
+            results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
+
+   
             
          
     runtime = 1/updates_per_ts
@@ -218,22 +238,23 @@ def experiment(policy, updates_per_ts, dataset_dir=".", result_dir=".", limit=No
     
 
     print("saving", f"{result_dir}/{policy}_{updates_per_ts}_results.csv")
-    update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_updates.csv")
-    results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_results.csv")
+    update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
+    results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
 
 if __name__ == "__main__":
 
 
     name = "ml-1m"
-    dataset_dir = use_dataset(name)
-    result_dir = use_results(name)
+    dataset_dir = use_dataset(name, download=False)
+    result_dir = use_results(name, download=False)
     #os.makedirs(result_dir, exist_ok=True)
-    workers = 40
+    workers = 144
     limit = None
     
-    policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    #policies = ["min_past"]
-    updates_per_ts = [1, 2, 4, 8, 10, 100]
+    #policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = ["last_query"]
+    updates_per_ts = [1, 2, 4] #, 8, 10]
+    ts_factors = [10, 100] #, 1000]
 
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
@@ -241,7 +262,8 @@ if __name__ == "__main__":
     with concurrent.futures.ProcessPoolExecutor(workers) as executor:
         for p in policies: 
             for u in updates_per_ts: 
-                futures.append(executor.submit(experiment, p, u, dataset_dir,  result_dir, limit))
+                for ts_factor in ts_factors:
+                    futures.append(executor.submit(experiment, p, u, ts_factor, dataset_dir,  result_dir, limit))
          
         for f in futures: 
             try: 
