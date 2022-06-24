@@ -1,5 +1,13 @@
 # Feature Store Benchmark 
 
+## Setup 
+
+Setup terraform: 
+```
+terraform apply;
+terraform output -json > config.json;
+```
+
 ## Repository structure 
 
 ```
