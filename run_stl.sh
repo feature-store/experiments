@@ -1,5 +1,4 @@
 set -ex
-
 # note: 10*num workers works, 0.01 sleep
 slide_size=288
 window_size=864
@@ -41,3 +40,4 @@ done
 done 
 done 
 done
+
