@@ -54,7 +54,7 @@ def simulate(data, start_ts, runtime, policy):
    
     # start with initial set of models
     last_model = {key: get_model(data, key, start_ts) for key in range(1, FLAGS.num_keys+1, 1)} 
-    next_update_time = start_ts + runtime # time when model is completed
+    next_update_time = start_ts #+ runtime # time when model is completed
 
     for ts in tqdm(range(start_ts, FLAGS.max_len, 1)):
 
@@ -81,10 +81,14 @@ def simulate(data, start_ts, runtime, policy):
                 score[key-1] = ts-last_time
 
         # can update model
-        if ts >= next_update_time: 
+        while ts >= next_update_time: 
             # pick max error key 
             key = np.array(score).argmax() + 1
             #print(key, score)
+
+            if max(score) == 0: # nothing to update
+                print("nothing to update", ts)
+                break
             
             # mark as update time for key 
             update_times[key].append(ts) 
@@ -142,9 +146,11 @@ def get_model(data, key, ts):
     """
 
     chunk = data[key][ts - FLAGS.window_size: ts]
+    st = time.time()
     last_model = STLForecast(
         chunk, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=24
     ).fit()
+    print(time.time() - st)
     return {"model": last_model, "forecast": last_model.forecast(2000), "data": chunk, "time": ts}
 
 def read_data(dataset_dir):
@@ -163,7 +169,7 @@ def read_data(dataset_dir):
     return data
 
 def main(argv):
-    runtime = [24, 12, 4]
+    runtime = [1000000, 24, 12, 4, 2, 1, 0]
     policy = ["round_robin", "total_error"]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
@@ -191,13 +197,15 @@ def main(argv):
                 [r, p, k, i, update_times[k][i]]
                 for k, v in update_times.items() for i in range(len(v))
             ])
-            u_df.columns = ["runtime", "policy", "key", "i", "time"]
            
             # write experiment CSV
             folder = f"{p}_{r}_A1"
             os.makedirs(f"{result_dir}/{folder}", exist_ok=True)
             df.to_csv(f"{result_dir}/{folder}/simulation_predictions.csv")
             r_df.to_csv(f"{result_dir}/{folder}/simulation_result.csv")
+            u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
+            print(u_df)
+            u_df.columns = ["runtime", "policy", "key", "i", "time"]
             u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
            
             # aggregate data 

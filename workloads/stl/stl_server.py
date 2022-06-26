@@ -1,5 +1,4 @@
-import glob
-import itertools
+import glob import itertools
 import json
 import os
 import pickle
@@ -139,10 +138,6 @@ class BasePriorityScheduler(BaseScheduler):
                 #logger.msg(f"Queue size is zero - system not fully utilized")
                 return Record.make_wait_event(self.new_waker())
 
-            if len(self.sorted_keys_by_timestamp)  == 0: 
-                print("WHY IS LIST EMPTY??")
-                print(self.key_to_event)
-                print(self.sorted_keys_by_timestamp)
             latest_key = self.sorted_keys_by_timestamp.pop()
             record = self.key_to_event.pop(latest_key)
             prio = self.key_to_priority.pop(latest_key)
@@ -228,7 +223,6 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         y_train = np.array(feature.y_train)
 
         assert len(record.entry.seq_nos) == 864, f"Unexpected length {len(record.entry.seq_nos)}"
-        #assert len(y_true) % 288 == 0, f"Unexpected length {len(y_true)}"
 
         # TODO: sample if too heavy weight
         # TODO: maybe scale this by staleness
@@ -439,6 +433,9 @@ class STLFitForecast(BaseTransform):
         self.num_updates += 1
         if self.num_updates % 1000:
             print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
+
+        self.num_updates += 1
+        print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
 
         forecast_record = TimeSeriesValue(
             key_id=key_id,

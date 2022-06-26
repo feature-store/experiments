@@ -101,8 +101,11 @@ def loss(ratings):
     return mean_squared_error(y_true, y_pred)
     
 
-def predict_user_movie_rating(user_feature, movie_feature):
-    return user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+def predict_user_movie_rating(user_feature, movie_feature, d=50):
+    p = user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    if p < 1: p = 1
+    if p > 5: p = 5
+    return p 
 
 if __name__ == "__main__":
 
@@ -121,7 +124,6 @@ if __name__ == "__main__":
     start_ts, med_ts, end_ts = split_data(split, ratings_df)
     train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
     test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
-    
     
     n = ratings_df.user_id.max()+1
     m = ratings_df.movie_id.max()+1

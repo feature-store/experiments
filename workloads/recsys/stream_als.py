@@ -1,4 +1,5 @@
 import pandas as pd
+import time
 import concurrent.futures
 from scipy.sparse import coo_matrix
 from scipy.sparse import dok_matrix
@@ -27,6 +28,7 @@ from workloads.util import use_results, use_dataset, read_config, log_dataset
 # ratings is an n by m sparse matrix
 def update_user(user_id, user_data, movie_features, d=50):
    # user_data = ratings.getrow(uid)
+    st = time.time()
     user_data = user_data.tocoo() # lookup all rating data for this user
     movie_ids = user_data.col
     values = user_data.data
@@ -43,6 +45,8 @@ def update_user(user_id, user_data, movie_features, d=50):
     #model = Ridge(alpha=alpha) #Maybe use RidgeCV() instead so we don't tune lambda
     model = Ridge(alpha=0.001, fit_intercept=True)
     model.fit(X, Y)
+
+    #print(time.time() - st)
     
     return np.append(model.coef_, model.intercept_)
 
@@ -192,6 +196,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
 
     queue = UserEventQueue(user_features.shape[0], policy, past_updates) 
     #for ts in tqdm(list(data.keys())[:limit]): 
+    next_ts = 0
     for ts in list(data.keys())[:limit]: 
 
         # process events
@@ -210,20 +215,35 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             timestamps.append(ts)
             users.append(uid)
             movies.append(mid)
+
+        if updates_per_ts is not None and updates_per_ts >= 1:
             
-        for i in range(updates_per_ts): 
-            uid = queue.pop()
-            if uid is None: 
-                #print(f"{ts}: No updates in queue")
-                break 
-            user_features[uid] = update_user(uid, ratings, movie_features, d)
-            update_times[uid].append(ts)
-            #print("update", uid)
-            
-            # TODO: make sure overall loss is decreasing (training error)
+            for i in range(updates_per_ts): 
+                uid = queue.pop()
+                if uid is None: 
+                    #print(f"{ts}: No updates in queue")
+                    break 
+                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                update_times[uid].append(ts)
+                
+                # TODO: make sure overall loss is decreasing (training error)
+        elif updates_per_ts is not None: 
+            if ts >= next_ts:
+                uid = queue.pop()
+                if uid is None: 
+                    #print(f"{ts}: No updates in queue")
+                    break 
+                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                update_times[uid].append(ts)
+                next_ts = ts + 1/updates_per_ts
+                #print(ts, next_ts, len(data[ts]))
+            #else:
+                #print(ts, len(data[ts]))
+
+ 
 
         if ts % 1000 == 0:
-            runtime = 1/updates_per_ts
+            runtime = 1/updates_per_ts if updates_per_ts is not None else None
             update_df = pd.DataFrame([
                 [policy, runtime, k, i, update_times[k][i]]
                 for k, v in update_times.items() for i in range(len(v))
@@ -231,12 +251,12 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
     
 
-            print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_results.csv")
+            print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
             update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
             results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
 
          
-    runtime = 1/updates_per_ts
+    runtime = 1/updates_per_ts if updates_per_ts is not None else None
     update_df = pd.DataFrame([
         [policy, runtime, k, i, update_times[k][i]]
         for k, v in update_times.items() for i in range(len(v))
@@ -256,14 +276,14 @@ if __name__ == "__main__":
     dataset_dir = use_dataset(name, download=False)
     result_dir = use_results(name, download=False)
     #os.makedirs(result_dir, exist_ok=True)
-    workers = 144
+    workers = 64
     limit = None
     
-    #policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    policies = ["last_query"]
-    updates_per_ts = [1, 2, 4] #, 8, 10]
-    ts_factors = [10, 100] #, 1000]
-
+    policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    updates_per_ts = [100000] #[0.5, 0.2, None]
+    #updates_per_ts = [1, 2, 4]
+    #updates_per_ts = [3]
+    ts_factors = [10, 100]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []
