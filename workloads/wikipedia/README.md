@@ -1,5 +1,10 @@
 # Wikipedia Experiment Pipeline
 
+*MUST USE PYTHON 3.6* (due to DPR dependency). Use `policy-exp` branch. 
+```
+python3.6 -m spacy download en_core_web_sm
+```
+
 The Wikipedia pipeline uses data collected from the Wikipedia RecentChanges and PageView API to simulate maintaining document embeddings as documents are edited and queried by a downstream retrival task. 
 
 1. *Offline Simulation Pipeline* - The offline simulation pipeline in the `offline/` folder usegenerate plans under different simulation settings and evaluates overall prediction quality. 

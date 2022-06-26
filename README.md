@@ -1,5 +1,21 @@
 # Feature Store Benchmark 
 
+## Setup 
+
+Run 
+```
+pip install -r requirements.txt
+export PYTHONPATH='.'
+```
+Check the `config.yml` file and make sure the required files and directories exist. 
+
+
+(Optional) Setup terraform: 
+```
+terraform apply;
+terraform output -json > config.json;
+```
+
 ## Repository structure 
 
 ```

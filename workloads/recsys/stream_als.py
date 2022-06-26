@@ -5,9 +5,8 @@ from scipy.sparse import coo_matrix
 from scipy.sparse import dok_matrix
 from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.metrics import mean_squared_error
-from pyspark.sql import SparkSession
-from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.recommendation import ALS
+
+import time
 
 from sklearn.metrics import mean_squared_error
 
@@ -79,6 +78,7 @@ class UserEventQueue:
         self.past_updates = past_updates
         self.queue = defaultdict(list)
         self.staleness = defaultdict(lambda: 0)
+        self.last_key = defaultdict(lambda: 0)
         
     def push(self, uid, mid, rating, user_features, movie_features): 
         
@@ -92,6 +92,9 @@ class UserEventQueue:
             # update per key 
             self.total_error[uid] += error
         self.queue[uid].append((uid, mid, rating))
+
+        # TODO: try moving existing keys to front? 
+        self.last_key[uid] = time.time()
         
     def arg_max(self, data_dict): 
         max_key = None
@@ -115,6 +118,8 @@ class UserEventQueue:
     def choose_key(self): 
         if self.policy == "total_error_cold" or self.policy == "total_error":
             key = self.arg_max(self.total_error)
+        elif self.policy == "last_query":
+            key = self.arg_max(self.last_key)
         elif self.policy == "max_pending":
             key = self.arg_max({key: len(self.queue[key]) for key in self.queue.keys()})
         elif self.policy == "min_past": 
@@ -272,7 +277,6 @@ if __name__ == "__main__":
     #updates_per_ts = [1, 2, 4]
     #updates_per_ts = [3]
     ts_factors = [10, 100]
-
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []

@@ -23,8 +23,9 @@ from ralf.v2 import (
     RalfApplication,
     RalfConfig,
     Record,
+    KinesisDataSource
 )
-from ralf.v2.operator import OperatorConfig, RayOperatorConfig
+from ralf.v2.operator.operator import OperatorConfig, RayOperatorConfig
 from ralf.v2.utils import get_logger
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
@@ -68,7 +69,7 @@ flags.DEFINE_string(
 
 flags.DEFINE_string(
     "results_dir",
-    default=f"results/{int(time.time())}",
+    default=f"results/stl/results/{int(time.time())}",
     help="Diretory to write result jsonl to",
     required=False,
 )
@@ -97,6 +98,8 @@ class BasePriorityScheduler(BaseScheduler):
 
         self.max_prio = 100000000000
 
+        self.keys = set([])
+
     @property
     def writer_lock(self):
         if self._writer_lock is None:
@@ -114,6 +117,7 @@ class BasePriorityScheduler(BaseScheduler):
             return
 
         record_key = record.shard_key
+        self.keys.add(record_key)
         with self.writer_lock:
             self.key_to_event[record_key] = record
             # Remove the key so we can recompute sort key
@@ -133,6 +137,7 @@ class BasePriorityScheduler(BaseScheduler):
 
         with self.writer_lock:
             if len(self.key_to_event) == 0:
+                #logger.msg(f"Queue size is zero - system not fully utilized")
                 return Record.make_wait_event(self.new_waker())
 
             print(len(self.key_to_event), len(self.sorted_keys_by_timestamp))
@@ -142,6 +147,7 @@ class BasePriorityScheduler(BaseScheduler):
             #self.key_to_priority[latest_key] = 0
             if self.qsize() == 0: 
                 logger.msg(f"Queue size is zero - system not fully utilized")
+            logger.msg(f"Number of keys {len(list(self.keys))}")
         return record
 
     def qsize(self) -> int:
@@ -220,30 +226,29 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         y_train = np.array(feature.y_train)
 
         assert len(record.entry.seq_nos) == 864, f"Unexpected length {len(record.entry.seq_nos)}"
-        assert len(y_true) % 288 == 0, f"Unexpected length {len(y_true)}"
 
         # TODO: sample if too heavy weight
         # TODO: maybe scale this by staleness
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
-        ) * len(y_true)
+        ) * len(y_true)  
 
-        print(record.shard_key, "Marginal error", error, forecast_indicies.max() - start, len(y_true), self.key_to_priority.get(record.shard_key, 0))
-
-        if self.epsilon is not None:
-            error = max(error, self.epsilon) # minimum error 
-
-        # add to current error
-        return self.key_to_priority.get(record.shard_key, 0) + error
-
+        if self.epsilon is not None: 
+            # return max of adding epsilon or returning ASE
+            return max(
+                self.key_to_priority.get(record.shard_key, 0) + self.epsilon, # add epsilon each time
+                error
+            )
+        return error
 
 @dataclass
 class SourceValue:
-    key_id: int
-    value: float
-    seq_no: int
+    key: int
+    max_cpu: float
+    min_cpu: float
+    avg_cpu: float
+    timestamp: int
     ingest_time: float
-
 
 class DataSource(BaseTransform):
     """Generate event data over keys"""
@@ -278,6 +283,7 @@ class DataSource(BaseTransform):
             with open(cache_path, "rb") as f:
                 self.buffer = pickle.load(f)
         else:
+            logger.msg(f"Generating fresh cache {cache_path}")
             cursor = self.conn.execute(
                 "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
                 f"int_id in ({self.keys_selection_clause})"
@@ -285,7 +291,10 @@ class DataSource(BaseTransform):
             self.buffer = defaultdict(list)
             for ts, int_id, avg_cpu in cursor:
                 self.buffer[ts].append((int_id, avg_cpu))
+            with open(cache_path, "wb") as f:
+                pickle.dump(self.buffer, f)
         logger.msg("All keys loaded")
+        logger.msg(f"Num timestamps in self.buffer {len(self.buffer)}")
 
         self.result_file = open(
             os.path.join(self.results_dir, f"source.{os.getpid()}.jsonl"), "w"
@@ -342,6 +351,7 @@ class Window(BaseTransform):
         self._seq_nos: DefaultDict[int, List[int]] = defaultdict(list)
         self.window_size = window_size
         self.slide_size = slide_size
+        self.st = defaultdict(lambda: 0)
 
     def prepare(self):
         logger.msg(
@@ -349,15 +359,20 @@ class Window(BaseTransform):
         )
 
     def on_event(self, record: Record[SourceValue]) -> Optional[Record[WindowValue]]:
-        key_id = record.entry.key_id
-        self._data[key_id].append(record.entry.value)
-        self._seq_nos[key_id].append(record.entry.seq_no)
+        key_id = record.entry.key
+        self._data[key_id].append(record.entry.avg_cpu)
+        self._seq_nos[key_id].append(record.entry.timestamp)
 
         if len(self._data[key_id]) >= self.window_size:
+            #print("window time", time.time() - st[key_id])
+            self.st[key_id] = time.time()
+
             window = list(self._data[key_id])
             self._data[key_id] = self._data[key_id][self.slide_size :]
             seq_nos = list(self._seq_nos[key_id])
             self._seq_nos[key_id] = self._seq_nos[key_id][self.slide_size :]
+
+            assert len(window) == self.window_size, f"Invalid window length {window}"
 
             return Record(
                 entry=WindowValue(
@@ -366,7 +381,7 @@ class Window(BaseTransform):
                     seq_nos=seq_nos,
                     last_ingest_time=record.entry.ingest_time,
                 ),
-                shard_key=str(record.entry.key_id),
+                shard_key=str(record.entry.key),
             )
         return None
 
@@ -408,6 +423,7 @@ class STLFitForecast(BaseTransform):
         with warnings.catch_warnings():
             # catch warning for ML fit
             warnings.filterwarnings("ignore")
+            st = time.time()
             model = STLForecast(
                 np.array(record.entry.values),
                 ARIMA,
@@ -415,6 +431,11 @@ class STLFitForecast(BaseTransform):
                 period=12 * 24,  # 5 min timestamp interval, period of one day
             ).fit()
             forecast = model.forecast(9000)
+            print("runtime", time.time() - st)
+
+        self.num_updates += 1
+        if self.num_updates % 1000:
+            print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
 
         self.num_updates += 1
         print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
@@ -429,7 +450,7 @@ class STLFitForecast(BaseTransform):
         )
 
         self.data[key_id] = forecast_record
-        print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
+        #print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
 
         self.result_file.write(
             json.dumps(
@@ -471,35 +492,35 @@ def main(argv):
     print("Results", f"{FLAGS.results_dir}/metrics")
 
     # Setup dataset directory
-    conn = sqlite3.connect(FLAGS.azure_database)
-    conn.executescript("PRAGMA journal_mode=WAL;")
+    #conn = sqlite3.connect(FLAGS.azure_database)
+    #conn.executescript("PRAGMA journal_mode=WAL;")
 
-    num_keys = FLAGS.num_keys
-    cache_file = f"query_cache_{num_keys}.json"
-    if os.path.exists(cache_file):
-        with open(cache_file, "r") as f:
-            cache = json.load(f)
-            keys = cache["keys"]
-            all_timestamps = cache["all_timestamps"]
-    else:
-        logger.msg(f"Genering query cache for num_keys={num_keys}")
-        keys = list(
-            itertools.chain.from_iterable(
-                conn.execute(
-                    f"SELECT int_id FROM readings GROUP BY int_id LIMIT {num_keys};"
-                )
-            )
-        )
-        all_timestamps = list(
-            itertools.chain.from_iterable(
-                conn.execute(
-                    "SELECT timestamp FROM readings GROUP BY timestamp ORDER BY timestamp"
-                ).fetchall()
-            )
-        )
-        with open(cache_file, "w") as f:
-            json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
-    logger.msg(f"Working with {len(keys)} keys")
+    #num_keys = FLAGS.num_keys
+    #cache_file = f"query_cache_{num_keys}.json"
+    #if os.path.exists(cache_file):
+    #    with open(cache_file, "r") as f:
+    #        cache = json.load(f)
+    #        keys = cache["keys"]
+    #        all_timestamps = cache["all_timestamps"]
+    #else:
+    #    logger.msg(f"Genering query cache for num_keys={num_keys}")
+    #    keys = list(
+    #        itertools.chain.from_iterable(
+    #            conn.execute(
+    #                f"SELECT int_id FROM readings GROUP BY int_id LIMIT {num_keys};"
+    #            )
+    #        )
+    #    )
+    #    all_timestamps = list(
+    #        itertools.chain.from_iterable(
+    #            conn.execute(
+    #                "SELECT timestamp FROM readings GROUP BY timestamp ORDER BY timestamp"
+    #            ).fetchall()
+    #        )
+    #    )
+    #    with open(cache_file, "w") as f:
+    #        json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
+    #logger.msg(f"Working with {len(keys)} keys")
 
     os.makedirs(FLAGS.results_dir)
     os.makedirs(f"{FLAGS.results_dir}/metrics")
@@ -518,14 +539,19 @@ def main(argv):
         "ce": CumulativeErrorScheduler(FLAGS.epsilon),
     }
 
+    num_shards = 250
+    stream_arn = "arn:aws:kinesis:us-west-2:367027304074:stream/ralf-stream"
+    stream_name = "ralf-stream"
+
     app.source(
-        DataSource(
-            keys=keys,
-            sleep=FLAGS.source_sleep_per_batch,
-            results_dir=FLAGS.results_dir,
-            azure_database=FLAGS.azure_database,
-            all_timestamps=all_timestamps,
-        ),
+        #DataSource(
+        #    keys=keys,
+        #    sleep=FLAGS.source_sleep_per_batch,
+        #    results_dir=FLAGS.results_dir,
+        #    azure_database=FLAGS.azure_database,
+        #    all_timestamps=all_timestamps,
+        #),
+        KinesisDataSource(stream_name, stream_arn, num_shards, shard_key="key", data_class=SourceValue),
         operator_config=OperatorConfig(
             ray_config=RayOperatorConfig(num_replicas=1),
         ),
