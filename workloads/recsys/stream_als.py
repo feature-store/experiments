@@ -56,7 +56,12 @@ def loss(ratings):
     
 
 def predict_user_movie_rating(user_feature, movie_feature, d=50):
-    return user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    p = user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    if p < 1: 
+        return 1
+    if p > 5: 
+        return 5
+    return p
 
 class UserEventQueue: 
     
@@ -148,23 +153,27 @@ class UserEventQueue:
             
         return key 
 
-def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50): 
+def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50, split=0.5): 
 
     # read data 
-    test_df = pd.read_csv(f'{dataset_dir}/stream.csv')
-    train_df = pd.read_csv(f'{dataset_dir}/train.csv')
+    test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
+    train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
     start_ts = test_df.timestamp.min()
     test_df.timestamp = test_df.timestamp.apply(lambda ts: int((ts - start_ts)/ts_factor))
     data = {}
     for ts, group in tqdm(test_df.groupby("timestamp")):
         data[ts] = group.to_dict("records")
-    ratings = pickle.load(open(f"{result_dir}/ratings.pkl", "rb"))
-    user_features = pickle.load(open(f"{result_dir}/train_user_features.pkl", "rb"))
-    movie_features = pickle.load(open(f"{result_dir}/train_movie_features.pkl", "rb"))
-    train_user_features = pickle.load(open(f"{result_dir}/train_user_features.pkl", "rb"))
-    train_movie_features = pickle.load(open(f"{result_dir}/train_movie_features.pkl", "rb"))
+    ratings = pickle.load(open(f"{result_dir}/ratings_{split}.pkl", "rb"))
 
-    past_updates = pickle.load(open(f"{result_dir}/past_updates.pkl", "rb"))
+    # updated features
+    user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
+    movie_features = pickle.load(open(f"{result_dir}/train_movie_features_{split}.pkl", "rb"))
+
+    # original features
+    train_user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
+    train_movie_features = pickle.load(open(f"{result_dir}/train_movie_features_{split}.pkl", "rb"))
+
+    past_updates = pickle.load(open(f"{result_dir}/past_updates_{split}.pkl", "rb"))
     
     print(user_features.shape[0], len(past_updates.keys()))
     for uid in range(user_features.shape[0]):
@@ -226,8 +235,6 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
             results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
 
-   
-            
          
     runtime = 1/updates_per_ts
     update_df = pd.DataFrame([
@@ -245,6 +252,7 @@ if __name__ == "__main__":
 
 
     name = "ml-1m"
+    split = 0.5
     dataset_dir = use_dataset(name, download=False)
     result_dir = use_results(name, download=False)
     #os.makedirs(result_dir, exist_ok=True)

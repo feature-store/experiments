@@ -33,8 +33,8 @@ def split_data(quantile, df):
     seen_movies = set(train_df['movie_id'])
     stream_df = stream_df.drop(stream_df[stream_df['movie_id'].map(lambda x: x not in seen_movies)].index)
     print("number movies", len(seen_movies), len(set(stream_df['movie_id'])), "stream length", len(stream_df))
-    train_df.to_csv(f'{dataset_dir}/train.csv', header=True, index = False)
-    stream_df.to_csv(f'{dataset_dir}/stream.csv', header=True, index = False)
+    train_df.to_csv(f'{dataset_dir}/train_{quantile}.csv', header=True, index = False)
+    stream_df.to_csv(f'{dataset_dir}/stream_{quantile}.csv', header=True, index = False)
     return start_ts, med_ts, end_ts
 
 def initialize_features(n, m, d):
@@ -106,6 +106,10 @@ def predict_user_movie_rating(user_feature, movie_feature):
 
 if __name__ == "__main__":
 
+    dataset = "ml-1m"
+    split = 0.5 # split between model train / stream 
+    d = 50  # dimentions 
+
     dataset_dir = use_dataset("ml-1m", download=True)
     result_dir = use_results("ml-1m")
     workers = 40
@@ -114,14 +118,13 @@ if __name__ == "__main__":
     ratings_df = pd.read_csv(ratings_path)
     ratings_df.columns = ['user_id', 'movie_id', 'rating', 'timestamp']
     
-    start_ts, med_ts, end_ts = split_data(0.75, ratings_df)
-    train_df = pd.read_csv(f'{dataset_dir}/train.csv')
-    test_df = pd.read_csv(f'{dataset_dir}/stream.csv')
+    start_ts, med_ts, end_ts = split_data(split, ratings_df)
+    train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
+    test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
     
     
     n = ratings_df.user_id.max()+1
     m = ratings_df.movie_id.max()+1
-    d = 50 
     print(n, m, d)
    
     # construct sparse ratings matrix
@@ -142,10 +145,11 @@ if __name__ == "__main__":
     mids = list(set([k[1] for k in ratings.keys()]))
    
     os.makedirs(result_dir, exist_ok=True)
-    pickle.dump(ratings, open(f"{result_dir}/ratings.pkl", "wb"))
+    pickle.dump(ratings, open(f"{result_dir}/ratings_{split}.pkl", "wb"))
     # store past updates 
-    #past_updates = {uid: ratings.getrow(uid).size for uid in uids}
-    #pickle.dump(past_updates, open(f"{result_dir}/past_updates.pkl", "wb"))
+    print("Saving past updates..")
+    past_updates = {uid: ratings.getrow(uid).size for uid in uids}
+    pickle.dump(past_updates, open(f"{result_dir}/past_updates_{split}.pkl", "wb"))
     
     
     max_iter = 50
@@ -172,7 +176,7 @@ if __name__ == "__main__":
             movie_features[mid] = f.result()
         print("loss", loss(ratings))
         
-    pickle.dump(user_features, open(f"{result_dir}/train_user_features.pkl", "wb"))
-    pickle.dump(movie_features, open(f"{result_dir}/train_movie_features.pkl", "wb"))
+        pickle.dump(user_features, open(f"{result_dir}/train_user_features_{split}.pkl", "wb"))
+        pickle.dump(movie_features, open(f"{result_dir}/train_movie_features_{split}.pkl", "wb"))
 
 
