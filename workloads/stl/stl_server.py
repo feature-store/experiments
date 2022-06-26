@@ -1,5 +1,4 @@
-import glob
-import itertools
+import glob import itertools
 import json
 import os
 import pickle
@@ -128,7 +127,6 @@ class BasePriorityScheduler(BaseScheduler):
             self.key_to_priority[record_key] = self.compute_priority(record)
 
             self.sorted_keys_by_timestamp.add(record_key)
-            print("add", record_key)
         self.wake_waiter_if_needed()
 
     def pop_event(self) -> Record:
@@ -140,7 +138,6 @@ class BasePriorityScheduler(BaseScheduler):
                 #logger.msg(f"Queue size is zero - system not fully utilized")
                 return Record.make_wait_event(self.new_waker())
 
-            print(len(self.key_to_event), len(self.sorted_keys_by_timestamp))
             latest_key = self.sorted_keys_by_timestamp.pop()
             record = self.key_to_event.pop(latest_key)
             prio = self.key_to_priority.pop(latest_key)
@@ -231,8 +228,8 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         # TODO: maybe scale this by staleness
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
-        ) * len(y_true)  
-
+        ) * len(y_true)
+   
         if self.epsilon is not None: 
             # return max of adding epsilon or returning ASE
             return max(
