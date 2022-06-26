@@ -1,3 +1,0 @@
-/data/wooders/wiki-plans/plan-round_robin_lifo-always_process-0.02-100.json
-/data/wooders/wiki-plans/plan-round_robin_lifo-always_process-0.05-100.json
-/data/wooders/wiki-plans/plan-round_robin_lifo-always_process-0.07-100.json
