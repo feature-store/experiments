@@ -1,5 +1,5 @@
 [default] 
-root_dir = /home/ubuntu/workspace/experiments
+root_dir = /home/ubuntu/experiments
 results_dir = %(root_dir)s/results
 dataset_dir = %(root_dir)s/datasets
 credentials = %(root_dir)s/ralf-vldb.json
