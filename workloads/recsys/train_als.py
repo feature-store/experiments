@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from scipy.sparse import coo_matrix
 from scipy.sparse import dok_matrix
 from sklearn.linear_model import Ridge, RidgeCV
@@ -105,8 +106,8 @@ def predict_user_movie_rating(user_feature, movie_feature):
 
 if __name__ == "__main__":
 
-    dataset_dir = use_dataset("ml-25m")
-    result_dir = use_results("ml-25m")
+    dataset_dir = use_dataset("ml-1m", download=True)
+    result_dir = use_results("ml-1m")
     workers = 40
 
     ratings_path = f"{dataset_dir}/ratings.csv"
@@ -139,7 +140,8 @@ if __name__ == "__main__":
     user_features, movie_features = initialize_features(n, m, d)
     uids = list(set([k[0] for k in ratings.keys()]))
     mids = list(set([k[1] for k in ratings.keys()]))
-    
+   
+    os.makedirs(result_dir, exist_ok=True)
     pickle.dump(ratings, open(f"{result_dir}/ratings.pkl", "wb"))
     # store past updates 
     #past_updates = {uid: ratings.getrow(uid).size for uid in uids}
