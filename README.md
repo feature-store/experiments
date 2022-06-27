@@ -16,6 +16,31 @@ terraform apply;
 terraform output -json > config.json;
 ```
 
+## Experiments 
+
+### recsys (ALS) 
+1. Train a model with `python workloads/recsys/train_als.py`. Make sure the split/dataset is set to what you want. 
+```
+python workloads/recsys/als_train \
+    --split 0.5 \
+    --dataset "ml-1m" \
+    --workers 12 \ 
+    --resume [True/False] \ # resume from previous checkpoint
+    --download_dataset [True/False] \
+```
+2. Run streaming inference/updates. Make sure you have the right dataset set in the script.
+
+```
+python workloads/recsys/stream_als.py \
+    --split 0.5 \
+    --dataset "ml-1m" \
+    --workers 12 \ 
+    --download_dataset [True/False] \ # download exisitng model/data
+```
+
+3. Evaluate in `nb/als-plots.ipynb`
+
+
 ## Repository structure 
 
 ```
