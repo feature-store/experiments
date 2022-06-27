@@ -17,14 +17,58 @@ import json
 from tqdm import tqdm 
 import concurrent.futures
 
-
+from absl import app, flags
 import pandas as pd, numpy as np, matplotlib.pyplot as plt
 
 import sys 
 sys.path.insert(1, "../")
 from workloads.util import use_results, use_dataset, read_config, log_dataset
 
-def split_data(quantile, df):  
+FLAGS = flags.FLAGS
+
+flags.DEFINE_string(
+    "dataset",
+    default="ml-1m",
+    help="Dataset to use", 
+    required=False
+)
+
+flags.DEFINE_float(
+    "split",
+    default=None,
+    help="Data split",
+    required=True,
+)
+
+flags.DEFINE_integer(
+    "dimentions",
+    default=50,
+    help="Dimentionality of features",
+    required=False,
+)
+
+flags.DEFINE_integer(
+    "workers",
+    default=50,
+    help="Number of workers to use",
+    required=False,
+)
+
+flags.DEFINE_boolean(
+    "resume",
+    default=False,
+    help="Whether to resume from existing checkpoint",
+    required=False,
+)
+
+flags.DEFINE_boolean(
+    "download_data",
+    default=False,
+    help="Whether to download required data",
+    required=False,
+)
+
+def split_data(quantile, df, dataset_dir):  
     start_ts = df['timestamp'].min()
     med_ts = df['timestamp'].quantile(quantile)
     end_ts = df['timestamp'].max()
@@ -107,22 +151,22 @@ def predict_user_movie_rating(user_feature, movie_feature, d=50):
     if p > 5: p = 5
     return p 
 
-if __name__ == "__main__":
+def main(argv):
 
-    dataset = "ml-1m"
-    split = 0.5 # split between model train / stream 
-    d = 50  # dimentions 
-    resume = True
+    dataset = FLAGS.dataset
+    split = FLAGS.split # split between model train / stream 
+    d = FLAGS.dimentions # dimentions 
+    resume = FLAGS.resume
 
-    dataset_dir = use_dataset("ml-1m", download=True)
-    result_dir = use_results("ml-1m")
-    workers = 40
+    dataset_dir = use_dataset(dataset, download=FLAGS.download_data)
+    result_dir = use_results(dataset)
+    workers = FLAGS.workers
 
     ratings_path = f"{dataset_dir}/ratings.csv"
     ratings_df = pd.read_csv(ratings_path)
     ratings_df.columns = ['user_id', 'movie_id', 'rating', 'timestamp']
     
-    start_ts, med_ts, end_ts = split_data(split, ratings_df)
+    start_ts, med_ts, end_ts = split_data(split, ratings_df, dataset_dir)
     train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
     test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
     
@@ -190,4 +234,6 @@ if __name__ == "__main__":
         pickle.dump(user_features, open(user_features_file, "wb"))
         pickle.dump(movie_features, open(movie_features_file, "wb"))
 
-
+if __name__ == "__main__":
+    app.run(main)
+ 
