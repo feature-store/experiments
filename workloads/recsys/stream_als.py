@@ -14,6 +14,7 @@ import pickle
 from collections import defaultdict
 import json
 
+from absl import app, flags
 from tqdm import tqdm 
 import concurrent.futures
 
@@ -23,6 +24,44 @@ import pandas as pd, numpy as np, matplotlib.pyplot as plt
 import sys 
 sys.path.insert(1, "../")
 from workloads.util import use_results, use_dataset, read_config, log_dataset
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_string(
+    "dataset",
+    default="ml-1m",
+    help="Dataset to use", 
+    required=False
+)
+
+flags.DEFINE_float(
+    "split",
+    default=None,
+    help="Data split",
+    required=True,
+)
+
+flags.DEFINE_integer(
+    "dimentions",
+    default=50,
+    help="Dimentionality of features",
+    required=False,
+)
+
+flags.DEFINE_integer(
+    "workers",
+    default=50,
+    help="Number of workers to use",
+    required=False,
+)
+
+flags.DEFINE_boolean(
+    "download_data",
+    default=False,
+    help="Whether to download required data",
+    required=False,
+)
+
 
 
 # ratings is an n by m sparse matrix
@@ -268,15 +307,17 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
     results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
 
-if __name__ == "__main__":
+def main(argv):
 
+    dataset = FLAGS.dataset
+    split = FLAGS.split # split between model train / stream 
+    d = FLAGS.dimentions # dimentions 
 
-    name = "ml-1m"
-    split = 0.5
-    dataset_dir = use_dataset(name, download=False)
-    result_dir = use_results(name, download=False)
-    #os.makedirs(result_dir, exist_ok=True)
-    workers = 64
+    dataset_dir = use_dataset(dataset, download=FLAGS.download_data)
+    result_dir = use_results(dataset, download=FLAGS.download_data)
+
+    workers = FLAGS.workers
+
     limit = None
     
     policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
@@ -291,7 +332,7 @@ if __name__ == "__main__":
         for p in policies: 
             for u in updates_per_ts: 
                 for ts_factor in ts_factors:
-                    futures.append(executor.submit(experiment, p, u, ts_factor, dataset_dir,  result_dir, limit))
+                    futures.append(executor.submit(experiment, p, u, ts_factor, dataset_dir,  result_dir, limit, d=d, split=split))
          
         for f in futures: 
             try: 
@@ -301,4 +342,6 @@ if __name__ == "__main__":
         res = concurrent.futures.wait(futures)
         executor.shutdown()
     
-    
+if __name__ == "__main__":
+    app.run(main)
+ 
