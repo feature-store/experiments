@@ -112,6 +112,7 @@ if __name__ == "__main__":
     dataset = "ml-1m"
     split = 0.5 # split between model train / stream 
     d = 50  # dimentions 
+    resume = True
 
     dataset_dir = use_dataset("ml-1m", download=True)
     result_dir = use_results("ml-1m")
@@ -139,10 +140,18 @@ if __name__ == "__main__":
         ),
         shape=(n, m)
     )
+
+    # get feature matrix
+    movie_features_file = f"{result_dir}/train_movie_features_{split}.pkl"
+    user_features_file = f"{result_dir}/train_user_features_{split}.pkl"
+    if resume:
+        user_features = pickle.load(open(user_features_file, "rb"))
+        movie_features = pickle.load(open(movie_features_file, "rb"))
+    else:
+        user_features, movie_features = initialize_features(n, m, d)
+
     # convert to dok matrix so can be updated 
     ratings = dok_matrix(ratings)
-    
-    user_features, movie_features = initialize_features(n, m, d)
     uids = list(set([k[0] for k in ratings.keys()]))
     mids = list(set([k[1] for k in ratings.keys()]))
    
@@ -178,7 +187,7 @@ if __name__ == "__main__":
             movie_features[mid] = f.result()
         print("loss", loss(ratings))
         
-        pickle.dump(user_features, open(f"{result_dir}/train_user_features_{split}.pkl", "wb"))
-        pickle.dump(movie_features, open(f"{result_dir}/train_movie_features_{split}.pkl", "wb"))
+        pickle.dump(user_features, open(user_features_file, "wb"))
+        pickle.dump(movie_features, open(movie_features_file, "wb"))
 
 
