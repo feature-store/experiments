@@ -280,10 +280,10 @@ if __name__ == "__main__":
     limit = None
     
     policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    updates_per_ts = [100000] #[0.5, 0.2, None]
+    updates_per_ts = [0.2, 0.5, 1, 2, 3, 4, 100000] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [1, 2, 4]
     #updates_per_ts = [3]
-    ts_factors = [10, 100]
+    ts_factors = [60, 60*60, 60*60*24]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []
