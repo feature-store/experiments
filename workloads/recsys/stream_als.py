@@ -290,9 +290,9 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
     
 
-            print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
-            update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
-            results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
+            print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
+            update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
+            results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
 
          
     runtime = 1/updates_per_ts if updates_per_ts is not None else None
@@ -303,9 +303,9 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
     
 
-    print("saving", f"{result_dir}/{policy}_{updates_per_ts}_results.csv")
-    update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_updates.csv")
-    results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_results.csv")
+    print("saving", f"{result_dir}/{policy}_{updates_per_ts}_split_{split}_results.csv")
+    update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
+    results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
 
 def main(argv):
 
@@ -321,7 +321,7 @@ def main(argv):
     limit = None
     
     policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    updates_per_ts = [0.2, 0.5, 1, 2, 3, 4, 100000] #[100000] #[0.5, 0.2, None]
+    updates_per_ts = [0.2, 0.5, 1, 2] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [1, 2, 4]
     #updates_per_ts = [3]
     ts_factors = [60, 60*60, 60*60*24]

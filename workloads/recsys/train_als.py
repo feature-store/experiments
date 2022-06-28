@@ -92,7 +92,7 @@ def initialize_features(n, m, d):
 
 
 # ratings is an n by m sparse matrix
-def update_user(user_id, user_data, d=50):
+def update_user(movie_features, user_id, user_data, d=50):
    # user_data = ratings.getrow(uid)
     user_data = user_data.tocoo() # lookup all rating data for this user
     movie_ids = user_data.col
@@ -113,7 +113,7 @@ def update_user(user_id, user_data, d=50):
     
     return np.append(model.coef_, model.intercept_)
 
-def update_movie(movie_id, movie_data, d=50):
+def update_movie(user_features, movie_id, movie_data, d=50):
     
     #movie_data = ratings.getcol(mid)
     movie_data = movie_data.tocoo() # lookup all rating data for this user
@@ -136,7 +136,7 @@ def update_movie(movie_id, movie_data, d=50):
 
     return np.append(model.coef_, model.intercept_)
 
-def loss(ratings): 
+def loss(ratings, user_features, movie_features): 
     y_pred = []
     y_true = []
     for item in ratings.items():
@@ -204,7 +204,7 @@ def main(argv):
     # store past updates 
     print("Saving past updates..")
     past_updates = {uid: ratings.getrow(uid).size for uid in uids}
-    pickle.dump(past_updates, open(f"{result_dir}/past_updates_{split}.pkl", "wb"))
+    #pickle.dump(past_updates, open(f"{result_dir}/past_updates_{split}.pkl", "wb"))
     
     
     max_iter = 50
@@ -215,7 +215,7 @@ def main(argv):
             for uid in tqdm(uids):
                 user_data = ratings.getrow(uid)
                 #print(update_user(uid, movie_ids, values))
-                futures.append(executor.submit(update_user, uid, user_data))
+                futures.append(executor.submit(update_user, movie_features, uid, user_data))
                 
         for uid, f in tqdm(zip(uids, futures)):
             user_features[uid] = f.result()
@@ -225,11 +225,11 @@ def main(argv):
         with concurrent.futures.ProcessPoolExecutor(workers) as executor:
             for mid in tqdm(mids): 
                 movie_data = ratings.getcol(mid)
-                futures.append(executor.submit(update_movie, mid, movie_data))
+                futures.append(executor.submit(update_movie, user_features, mid, movie_data))
     
         for mid, f in tqdm(zip(mids, futures)):
             movie_features[mid] = f.result()
-        print("loss", loss(ratings))
+        print("loss", loss(ratings, user_features, movie_features))
         
         pickle.dump(user_features, open(user_features_file, "wb"))
         pickle.dump(movie_features, open(movie_features_file, "wb"))
