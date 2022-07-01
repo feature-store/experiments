@@ -123,6 +123,9 @@ class UserEventQueue:
         self.queue = defaultdict(list)
         self.staleness = defaultdict(lambda: 0)
         self.last_key = defaultdict(lambda: 0)
+
+        # new baselines 
+        self.past_queries = defaultdict(lambda: 0) 
         
     def push(self, uid, mid, rating, user_features, movie_features): 
         
@@ -139,6 +142,7 @@ class UserEventQueue:
 
         # TODO: try moving existing keys to front? 
         self.last_key[uid] = time.time()
+        self.past_queries[uid] += 1
         
     def arg_max(self, data_dict): 
         max_key = None
@@ -170,6 +174,10 @@ class UserEventQueue:
             key = self.arg_max({key: 1/(self.past_updates.setdefault(key, 0)+1) for key in self.queue.keys()})
         elif self.policy == "round_robin": 
             key = self.arg_max(self.staleness)
+        elif self.policy == "query_proportional": 
+            key = self.arg_max(self.past_queries)
+        elif self.policy == "batch":
+            key = self.arg_max(self.staleness) # doensn't matter
         else: 
             raise ValueError("Invalid policy")
        
@@ -196,6 +204,13 @@ class UserEventQueue:
             
         return key 
 
+    def size(self): 
+        size = 0
+        for key in self.queue.keys(): 
+            if len(self.queue[key]) > 0:
+                size += 1
+        return size
+
 def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50, split=0.5): 
 
     # read data 
@@ -211,6 +226,8 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     # updated features
     user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
     movie_features = pickle.load(open(f"{result_dir}/train_movie_features_{split}.pkl", "rb"))
+
+
 
     # original features
     train_user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
@@ -236,6 +253,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     queue = UserEventQueue(user_features.shape[0], policy, past_updates) 
     #for ts in tqdm(list(data.keys())[:limit]): 
     next_ts = 0
+    update_budget = 0
     for ts in list(data.keys())[:limit]: 
 
         # process events
@@ -255,7 +273,21 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             users.append(uid)
             movies.append(mid)
 
-        if updates_per_ts is not None and updates_per_ts >= 1:
+
+        if policy == "batch":
+            update_budget += updates_per_ts
+            if queue.size() <= update_budget:
+
+                # update all uids in queue 
+                while True: 
+                    uid = queue.pop()
+                    if uid is None: 
+                        break
+                    user_features[uid] = update_user(uid, ratings, movie_features, d)
+                    update_times[uid].append(ts)
+                update_budget = 0 
+
+        elif updates_per_ts is not None and updates_per_ts >= 1:
             
             for i in range(updates_per_ts): 
                 uid = queue.pop()
@@ -320,7 +352,7 @@ def main(argv):
 
     limit = None
     
-    policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = ["batch"] #["query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
     updates_per_ts = [0.2, 0.5, 1, 2] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [1, 2, 4]
     #updates_per_ts = [3]
