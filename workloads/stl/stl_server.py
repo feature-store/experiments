@@ -1,4 +1,5 @@
-import glob import itertools
+import glob
+import itertools
 import json
 import os
 import pickle
@@ -22,9 +23,9 @@ from ralf.v2 import (
     RalfApplication,
     RalfConfig,
     Record,
-    KinesisDataSource
+    KinesisDataSource,
 )
-from ralf.v2.operator.operator import OperatorConfig, RayOperatorConfig
+from ralf.v2.operator import OperatorConfig, RayOperatorConfig
 from ralf.v2.utils import get_logger
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
@@ -135,14 +136,14 @@ class BasePriorityScheduler(BaseScheduler):
 
         with self.writer_lock:
             if len(self.key_to_event) == 0:
-                #logger.msg(f"Queue size is zero - system not fully utilized")
+                # logger.msg(f"Queue size is zero - system not fully utilized")
                 return Record.make_wait_event(self.new_waker())
 
             latest_key = self.sorted_keys_by_timestamp.pop()
             record = self.key_to_event.pop(latest_key)
             prio = self.key_to_priority.pop(latest_key)
-            #self.key_to_priority[latest_key] = 0
-            if self.qsize() == 0: 
+            # self.key_to_priority[latest_key] = 0
+            if self.qsize() == 0:
                 logger.msg(f"Queue size is zero - system not fully utilized")
             logger.msg(f"Number of keys {len(list(self.keys))}")
         return record
@@ -176,15 +177,13 @@ class RoundRobinScheduler(BasePriorityScheduler):
             )
             return self.max_prio
 
-
         return self.key_to_priority.get(record.shard_key, 0) + 1
 
 
 class CumulativeErrorScheduler(BasePriorityScheduler):
     """Prioritize the key that has highest prediction error so far"""
 
-
-    def __init__(self, epsilon = None):
+    def __init__(self, epsilon=None):
         # TODO: bring back the logic that temporarily disable a key if it is pending update
         # If that ever becomes an issue.
         # self.pending_updates: Dict[KeyType, float] = []
@@ -200,7 +199,7 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         start = self.last_seqno.get(record.shard_key, -1)
         incoming_seqnos = np.array([n for n in record.entry.seq_nos if n > start])
         self.last_seqno[record.shard_key] = incoming_seqnos.max()
-        #print("length", incoming_seqnos.shape, start)
+        # print("length", incoming_seqnos.shape, start)
 
         # lookup current feature
         feature: Record[TimeSeriesValue] = self._operator.get(record.shard_key)
@@ -209,7 +208,6 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
                 f"Missing feature for key {record.shard_key}, returning max_prio"
             )
             return self.max_prio
-
 
         forecast = np.array(feature.forecast)
         window_last_seqno = feature.last_seqno
@@ -222,21 +220,25 @@ class CumulativeErrorScheduler(BasePriorityScheduler):
         y_pred = np.take(forecast, forecast_indicies)
         y_train = np.array(feature.y_train)
 
-        assert len(record.entry.seq_nos) == 864, f"Unexpected length {len(record.entry.seq_nos)}"
+        assert (
+            len(record.entry.seq_nos) == 864
+        ), f"Unexpected length {len(record.entry.seq_nos)}"
 
         # TODO: sample if too heavy weight
         # TODO: maybe scale this by staleness
         error = mean_absolute_scaled_error(
             y_true=y_true, y_pred=y_pred, y_train=y_train
         ) * len(y_true)
-   
-        if self.epsilon is not None: 
+
+        if self.epsilon is not None:
             # return max of adding epsilon or returning ASE
             return max(
-                self.key_to_priority.get(record.shard_key, 0) + self.epsilon, # add epsilon each time
-                error
+                self.key_to_priority.get(record.shard_key, 0)
+                + self.epsilon,  # add epsilon each time
+                error,
             )
         return error
+
 
 @dataclass
 class SourceValue:
@@ -246,6 +248,7 @@ class SourceValue:
     avg_cpu: float
     timestamp: int
     ingest_time: float
+
 
 class DataSource(BaseTransform):
     """Generate event data over keys"""
@@ -326,7 +329,7 @@ class DataSource(BaseTransform):
         if len(batch) == 0:
             return
 
-        #print(f"Sending {len(batch)} rows at {self.ts} at {ingest_time}")
+        # print(f"Sending {len(batch)} rows at {self.ts} at {ingest_time}")
 
         self.result_file.write(json.dumps([i.entry.__dict__ for i in batch]))
         self.result_file.write("\n")
@@ -361,7 +364,7 @@ class Window(BaseTransform):
         self._seq_nos[key_id].append(record.entry.timestamp)
 
         if len(self._data[key_id]) >= self.window_size:
-            #print("window time", time.time() - st[key_id])
+            # print("window time", time.time() - st[key_id])
             self.st[key_id] = time.time()
 
             window = list(self._data[key_id])
@@ -415,7 +418,8 @@ class STLFitForecast(BaseTransform):
     def on_event(self, record: Record[WindowValue]):
         key_id = record.shard_key
 
-        if self.start_time is None: self.start_time = time.time()
+        if self.start_time is None:
+            self.start_time = time.time()
 
         with warnings.catch_warnings():
             # catch warning for ML fit
@@ -432,10 +436,18 @@ class STLFitForecast(BaseTransform):
 
         self.num_updates += 1
         if self.num_updates % 1000:
-            print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
+            print(
+                "avg throughput",
+                self.num_updates,
+                self.num_updates / (time.time() - self.start_time),
+            )
 
         self.num_updates += 1
-        print("avg throughput", self.num_updates, self.num_updates / (time.time() - self.start_time))
+        print(
+            "avg throughput",
+            self.num_updates,
+            self.num_updates / (time.time() - self.start_time),
+        )
 
         forecast_record = TimeSeriesValue(
             key_id=key_id,
@@ -447,7 +459,7 @@ class STLFitForecast(BaseTransform):
         )
 
         self.data[key_id] = forecast_record
-        #print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
+        # print(f"Update key {key_id}, last_seq_no {record.entry.seq_nos[-1]}")
 
         self.result_file.write(
             json.dumps(
@@ -489,17 +501,17 @@ def main(argv):
     print("Results", f"{FLAGS.results_dir}/metrics")
 
     # Setup dataset directory
-    #conn = sqlite3.connect(FLAGS.azure_database)
-    #conn.executescript("PRAGMA journal_mode=WAL;")
+    # conn = sqlite3.connect(FLAGS.azure_database)
+    # conn.executescript("PRAGMA journal_mode=WAL;")
 
-    #num_keys = FLAGS.num_keys
-    #cache_file = f"query_cache_{num_keys}.json"
-    #if os.path.exists(cache_file):
+    # num_keys = FLAGS.num_keys
+    # cache_file = f"query_cache_{num_keys}.json"
+    # if os.path.exists(cache_file):
     #    with open(cache_file, "r") as f:
     #        cache = json.load(f)
     #        keys = cache["keys"]
     #        all_timestamps = cache["all_timestamps"]
-    #else:
+    # else:
     #    logger.msg(f"Genering query cache for num_keys={num_keys}")
     #    keys = list(
     #        itertools.chain.from_iterable(
@@ -517,7 +529,7 @@ def main(argv):
     #    )
     #    with open(cache_file, "w") as f:
     #        json.dump({"keys": keys, "all_timestamps": all_timestamps}, f)
-    #logger.msg(f"Working with {len(keys)} keys")
+    # logger.msg(f"Working with {len(keys)} keys")
 
     os.makedirs(FLAGS.results_dir)
     os.makedirs(f"{FLAGS.results_dir}/metrics")
@@ -541,14 +553,16 @@ def main(argv):
     stream_name = "ralf-stream"
 
     app.source(
-        #DataSource(
-        #    keys=keys,
-        #    sleep=FLAGS.source_sleep_per_batch,
-        #    results_dir=FLAGS.results_dir,
-        #    azure_database=FLAGS.azure_database,
-        #    all_timestamps=all_timestamps,
-        #),
-        KinesisDataSource(stream_name, stream_arn, num_shards, shard_key="key", data_class=SourceValue),
+        # DataSource(
+        #     keys=keys,
+        #     sleep=FLAGS.source_sleep_per_batch,
+        #     results_dir=FLAGS.results_dir,
+        #     azure_database=FLAGS.azure_database,
+        #     all_timestamps=all_timestamps,
+        # ),
+        KinesisDataSource(
+            stream_name, stream_arn, num_shards, shard_key="key", data_class=SourceValue
+        ),
         operator_config=OperatorConfig(
             ray_config=RayOperatorConfig(num_replicas=1),
         ),
