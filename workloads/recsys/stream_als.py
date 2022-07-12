@@ -65,7 +65,7 @@ flags.DEFINE_boolean(
 
 
 # ratings is an n by m sparse matrix
-def update_user(user_id, user_data, movie_features, d=50):
+def update_user(user_id, user_data, movie_features, d=50, runtime_file=None):
    # user_data = ratings.getrow(uid)
     st = time.time()
     user_data = user_data.tocoo() # lookup all rating data for this user
@@ -84,6 +84,11 @@ def update_user(user_id, user_data, movie_features, d=50):
     #model = Ridge(alpha=alpha) #Maybe use RidgeCV() instead so we don't tune lambda
     model = Ridge(alpha=0.001, fit_intercept=True)
     model.fit(X, Y)
+
+    runtime = time.time() - st
+
+    if runtime_file is not None: 
+        open(runtime_file, "a").write(str(runtime) + "\n")
 
     #print(time.time() - st)
     
@@ -213,6 +218,12 @@ class UserEventQueue:
 
 def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50, split=0.5): 
 
+
+    # create/clear runtime file
+    runtime_file = f"{result_dir}/runtimes.txt"
+    open(runtime_file, "w").close()
+    print(runtime_file)
+
     # read data 
     test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
     train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
@@ -222,7 +233,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     for ts, group in tqdm(test_df.groupby("timestamp")):
         data[ts] = group.to_dict("records")
     ratings = pickle.load(open(f"{result_dir}/ratings_{split}.pkl", "rb"))
-
+#
     # updated features
     user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
     movie_features = pickle.load(open(f"{result_dir}/train_movie_features_{split}.pkl", "rb"))
@@ -283,7 +294,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                     uid = queue.pop()
                     if uid is None: 
                         break
-                    user_features[uid] = update_user(uid, ratings, movie_features, d)
+                    user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
                     update_times[uid].append(ts)
                 update_budget = 0 
 
@@ -294,7 +305,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
-                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
                 update_times[uid].append(ts)
                 
                 # TODO: make sure overall loss is decreasing (training error)
@@ -304,7 +315,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
-                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
                 update_times[uid].append(ts)
                 next_ts = ts + 1/updates_per_ts
                 #print(ts, next_ts, len(data[ts]))
@@ -335,7 +346,6 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
     
 
-    print("saving", f"{result_dir}/{policy}_{updates_per_ts}_split_{split}_results.csv")
     update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
     results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
 
@@ -352,11 +362,14 @@ def main(argv):
 
     limit = None
     
-    policies = ["batch"] #["query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    updates_per_ts = [0.2, 0.5, 1, 2] #[100000] #[0.5, 0.2, None]
-    #updates_per_ts = [1, 2, 4]
+    policies = ["min_past"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
+    #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
+    updates_per_ts = [3, 4, 5, 8]
     #updates_per_ts = [3]
-    ts_factors = [60, 60*60, 60*60*24]
+    #ts_factors = [60, 60*60, 60*60*24]
+    #ts_factors = [10, 100]
+    ts_factors = [60] #, 60*60, 60*60*24]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []
