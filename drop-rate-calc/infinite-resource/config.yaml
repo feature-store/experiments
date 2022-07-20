@@ -1,0 +1,5 @@
+generated_windows_glob_path: "/data/azure-windows/*"
+materialized_prediction_output_path: "/data/azure-full-resource-ts"
+compact_prediction_output_path: "/data/azure-full-predictions.npy"
+raw_db_path: "/home/ubuntu/azure_long_series_with_ts_array.duckdb"
+ground_truth_array_path: "/data/azure-windows-ts-array-ground-truth.npy"
