@@ -1,0 +1,8 @@
+materialized_prediction_output_path: "/data/azure-drop-half-ts"
+compact_prediction_output_path: "/data/azure-drop-half-predictions.npy"
+keep_frac: 0.5
+
+# constants
+generated_windows_glob_path: "/data/azure-windows/*"
+raw_db_path: "/home/ubuntu/azure_long_series_with_ts_array.duckdb"
+ground_truth_array_path: "/data/azure-windows-ts-array-ground-truth.npy"
