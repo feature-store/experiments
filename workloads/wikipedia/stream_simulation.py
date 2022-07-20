@@ -34,7 +34,7 @@ class Queue:
         self.queue = [] 
 
     def push(self, key, value): 
-        self.queue.append({"key": key, "value": value})
+        self.queue.append(value)
 
     def pop(self): 
         if len(self.queue) == 0: 
@@ -98,6 +98,7 @@ class Simulator:
 
         revid = self.embedding_version[doc_id]
         pred = self.stream_model.predict_single_doc(doc_questions_file, revid, doc_id)
+        print("PREDICTION", pred)
         return pred
 
 
@@ -147,6 +148,7 @@ class Simulator:
 
     def run(self): 
 
+        plan_results = [] #defaultdict(list)
         for ts in range(len(self.questions)): 
             timestep = ts / 100
 
@@ -157,9 +159,7 @@ class Simulator:
             # process edits
             for doc_id, doc_questions in self.questions[ts].items(): 
                 pred = self.predict_single(doc_id, doc_questions, ts)
-                print(pred)
-
-                # TODO: track
+                plan_results += pred
 
             # process questions:
             for key, revs in self.edits[ts].items(): 
@@ -171,6 +171,23 @@ class Simulator:
                 event = self.queue.pop()
                 if not event: break
                 self.process_update(event["doc_id"], event["filename"])
+
+            if len(plan_results) > 0:
+
+                top1, top5, top10 = 0, 0, 0
+                for result in plan_results:
+                    top1 += sum(result['doc_hits'][:1])
+                    top5 += sum(result['doc_hits'][:5])
+                    top10 += sum(result['doc_hits'][:10])
+                top1 = top1 / len(plan_results)
+                top5 = top5  / len(plan_results)
+                top10 = top10 / len(plan_results)
+
+                results = {'top1': top1,
+                           'top5': top5,
+                           'top10': top10}
+                print("RESULT", results)
+
                 
 
 
