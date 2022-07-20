@@ -151,3 +151,8 @@ Cargo.lock
 
 artifacts/
 results/
+
+*.pdf
+*.csv
+*.parquet
+*.pq
