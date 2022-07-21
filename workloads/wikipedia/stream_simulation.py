@@ -69,9 +69,12 @@ class Simulator:
         self.edits = json.load(open(stream_edit_file))
 
         # load initial data
-        self.embedding_version = json.load(open(init_data_file))
-        for doc_id, diff in tqdm(self.embedding_version.items()):
+        self.init_data = json.load(open(init_data_file))
+        self.embedding_version = {}
+        for doc_id, diff in tqdm(self.init_data.items()):
+            print("REV", diff["revid"])
             self.process_update(doc_id, diff["file"], init=True)
+            self.embedding_version[doc_id] = diff["revid"]
 
         # create update queue
         self.queue = Queue()
@@ -97,31 +100,39 @@ class Simulator:
         )
 
         revid = self.embedding_version[doc_id]
+        print("Using version", revid, "init", self.init_data[doc_id]["revid"])
         pred = self.stream_model.predict_single_doc(doc_questions_file, revid, doc_id)
-        print("PREDICTION", pred)
+        #print("PREDICTION", pred)
         return pred
 
 
     def process_update(self, doc_id, filename, init=False): 
 
         # TODO: add cache
+        print(filename)
 
         revid_old = filename.replace(".json", "").split("_")[1]
         revid = filename.replace(".json", "").split("_")[0]
 
-       # get updated embedding/passage data
-        if init: 
-            embedding_filename = self.embedding_path(revid, version="_orig")
-        else:
-            embedding_filename = self.embedding_path(revid, version="_new")
-
+        # get updated embedding/passage data
         data = json.load(open(os.path.join(self.rev_dir, filename)))
         timestamp = data["timestamp"]
         title = data["title"]
-        sents = [d["sent_b"] for d in data["diffs"][0]]
+
+        if init: # use old version
+            revid = revid_old
+            #embedding_filename = self.embedding_path(revid, version="_orig")
+            embedding_filename = self.embedding_path(revid, version="_orig")
+            sents = [d["sent_a"] for d in data["diffs"][0]]
+        else:
+            embedding_filename = self.embedding_path(revid, version="_new")
+            sents = [d["sent_b"] for d in data["diffs"][0]]
+            print(f"update {doc_id} to {revid}")
+            self.embedding_version[doc_id] = revid
 
         # load embedding
-        embedding_data = pickle.load(open(self.embedding_path(revid, version="_new"), "rb"))
+        print(embedding_filename)
+        embedding_data = pickle.load(open(embedding_filename, "rb"))
         passage_embeddings = embedding_data["embeddings"]
         passage_texts = embedding_data["passages"]
 
@@ -142,29 +153,34 @@ class Simulator:
         assert len(passage_ctx) == len(passage_texts)
         assert len(passage_embeddings) == len(passage_texts)
 
-        print(f"update {doc_id} to {revid}")
-        self.embedding_version[doc_id] = revid
-
+        
 
     def run(self): 
 
+        print("questions", len(self.questions))
+        print("edits", len(self.edits))
+
         plan_results = [] #defaultdict(list)
-        for ts in range(len(self.questions)): 
+        for ts in range(len(self.questions))[:-1000]: 
             timestep = ts / 100
 
-            print(self.questions[ts])
-            print(self.edits[ts])
+            #print(self.questions[ts])
+            #print(self.edits[ts])
 
 
             # process edits
             for doc_id, doc_questions in self.questions[ts].items(): 
+                for q in doc_questions: 
+                    print(q)
+                    print(ts, q["ts_min"])
                 pred = self.predict_single(doc_id, doc_questions, ts)
                 plan_results += pred
+                #plan_results = pred
 
             # process questions:
             for key, revs in self.edits[ts].items(): 
                 for rev in revs: 
-                    self.queue.push(key, {"doc_id": key, "filename": rev, "ts": timestep})
+                    self.queue.push(key, {"doc_id": key, "filename": rev, "ts": ts})
 
             # process updates
             for _ in range(self.updates): 
@@ -175,18 +191,22 @@ class Simulator:
             if len(plan_results) > 0:
 
                 top1, top5, top10 = 0, 0, 0
+                doc_size = 0 
                 for result in plan_results:
-                    top1 += sum(result['doc_hits'][:1])
-                    top5 += sum(result['doc_hits'][:5])
-                    top10 += sum(result['doc_hits'][:10])
+                    top1 += max(result['doc_hits'][:1])
+                    top5 += max(result['doc_hits'][:5])
+                    top10 += max(result['doc_hits'][:10])
+                    doc_size += len(result['doc_hits'])
                 top1 = top1 / len(plan_results)
                 top5 = top5  / len(plan_results)
                 top10 = top10 / len(plan_results)
+                doc_size = doc_size / len(plan_results)
 
                 results = {'top1': top1,
                            'top5': top5,
-                           'top10': top10}
-                print("RESULT", results)
+                           'top10': top10, 
+                           'doc_size': doc_size }
+                print(ts, "RESULT", results)
 
                 
 
@@ -198,7 +218,7 @@ class Simulator:
 
 def main(argv):
 
-    sim = Simulator(10) 
+    sim = Simulator(100) 
     sim.run()
     #runtime = [24, 12, 4, 2, 1, 0]
     #runtime = [4, 6, 8, 12, 24] #[1, 2, 3]
