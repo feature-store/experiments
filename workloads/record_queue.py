@@ -13,7 +13,7 @@ class Policy(Enum):
     QUERY_PROPORTIONAL = 'query_proportional'
     BATCH = 'batch'
 
-class UserEventQueue: 
+class RecordQueue: 
     
     """
     Event queue that selects group of user updates

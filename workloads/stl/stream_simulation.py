@@ -13,7 +13,7 @@ from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from tqdm import tqdm
 
 from workloads.util import use_results, use_dataset, log_results
-from workloads.record_queue import UserEventQueue, Policy
+from workloads.record_queue import RecordQueue, Policy
 
 from absl import app, flags
 
@@ -42,7 +42,7 @@ def simulate(data, start_ts, runtime, policy):
     :runtime: runtime of map function 
     :policy: policy to select keys 
     """
-    userQueue = UserEventQueue(FLAGS.num_keys+1, policy, [])
+    record_queue = RecordQueue(FLAGS.num_keys+1, policy, [])
     predictions = defaultdict(list)
     values = defaultdict(list)
     staleness = defaultdict(list)
@@ -72,12 +72,12 @@ def simulate(data, start_ts, runtime, policy):
                 )
             else:
                 e = 0
-            userQueue.push(key-1, e*t)
+            record_queue.push(key-1, e*t)
 
         # can update model
         while ts >= next_update_time: 
             # pick max error key 
-            key = userQueue.pop() + 1
+            key = record_queue.pop() + 1
             #print(key, score)
 
             if key is None: # nothing to update

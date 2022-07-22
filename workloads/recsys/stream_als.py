@@ -21,7 +21,7 @@ import pandas as pd, numpy as np
 import sys 
 sys.path.insert(1, "../")
 from workloads.util import use_results, use_dataset
-from workloads.record_queue import UserEventQueue, Policy
+from workloads.record_queue import RecordQueue, Policy
 
 FLAGS = flags.FLAGS
 
@@ -154,7 +154,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     if limit is None: 
         limit = len(list(data.keys()))
 
-    user_event_queue = UserEventQueue(user_features.shape[0], policy, past_updates)
+    record_queue = RecordQueue(user_features.shape[0], policy, past_updates)
     #for ts in tqdm(list(data.keys())[:limit]): 
     next_ts = 0
     update_budget = 0
@@ -172,7 +172,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             y_pred.append(predicted_rating)
             y_true.append(rating)
             error_score = rating - predicted_rating
-            user_event_queue.push(uid, error_score)
+            record_queue.push(uid, error_score)
             #print("orig loss:", loss(ratings))
             timestamps.append(ts)
             users.append(uid)
@@ -180,11 +180,11 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
 
         if policy == Policy.BATCH:
             update_budget += updates_per_ts
-            if user_event_queue.size() <= update_budget:
+            if record_queue.size() <= update_budget:
 
                 # update all uids in queue 
                 while True: 
-                    uid = user_event_queue.pop()
+                    uid = record_queue.pop()
                     if uid is None: 
                         break
                     user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
@@ -194,7 +194,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
         elif updates_per_ts is not None and updates_per_ts >= 1:
             
             for i in range(updates_per_ts): 
-                uid = user_event_queue.pop()
+                uid = record_queue.pop()
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
@@ -204,7 +204,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                 # TODO: make sure overall loss is decreasing (training error)
         elif updates_per_ts is not None: 
             if ts >= next_ts:
-                uid = user_event_queue.pop()
+                uid = record_queue.pop()
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
