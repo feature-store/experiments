@@ -105,7 +105,8 @@ class UserEventQueue:
         self.total_error[key] = 0
         
         # TODO: this is wrong
-        self.past_updates[key] = self.past_updates.setdefault(key, 0) + len(events)
+        if self.policy == Policy.MIN_PAST:
+            self.past_updates[key] = self.past_updates.setdefault(key, 0) + len(events)
             
         return key 
 

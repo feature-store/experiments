@@ -16,8 +16,8 @@ from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 from tqdm import tqdm
 from statsmodels.tsa.seasonal import STL
 
-from workloads.util import use_results, use_dataset, read_config, log_dataset, log_results
-from workloads.queue import UserEventQueue, Policy
+from util import use_results, use_dataset, read_config, log_dataset, log_results
+from record_queue import UserEventQueue, Policy
 
 from absl import app, flags
 
@@ -29,7 +29,7 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "num_keys",
-    default=67,
+    default=10,
     help="Number of keys to run on"
 )
 flags.DEFINE_integer(
@@ -67,12 +67,15 @@ def simulate(data, start_ts, runtime, policy):
 
             # policy scoring
             t = ts - last_time
-            e = mean_absolute_scaled_error(
-                    np.array(values[key][-t:]), 
-                    np.array(predictions[key][-t:]), 
-                    y_train=np.array(values[key][-t:]), 
-                    sp=1
-            )
+            if policy == "total_error" and len(predictions[key]) > 1 and t > 1:
+                e = mean_absolute_scaled_error(
+                        np.array(values[key][-t:]), 
+                        np.array(predictions[key][-t:]), 
+                        y_train=np.array(values[key][-t:]), 
+                        sp=1
+                )
+            else:
+                e = 0
             userQueue.push(key-1, e*t)
 
         # can update model
@@ -163,12 +166,13 @@ def read_data(dataset_dir):
     return data
 
 def main(argv):
-    runtime = [1000000, 24, 12, 4, 2, 1, 0]
+    runtime = [24]
+    #runtime = [1000000, 24, 12, 4, 2, 1, 0]
     policies = [Policy.ROUND_ROBIN, Policy.TOTAL_ERROR]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
-    dataset_dir = use_dataset("yahoo/A1")
+    dataset_dir = use_dataset("yahoo/A1", True)
 
     # aggregate data structures
     results_df = pd.DataFrame()

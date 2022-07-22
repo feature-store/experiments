@@ -1,9 +1,7 @@
 import pandas as pd
 import time
 import concurrent.futures
-from scipy.sparse import coo_matrix
-from scipy.sparse import dok_matrix
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 
 import time
@@ -12,19 +10,18 @@ from sklearn.metrics import mean_squared_error
 
 import pickle
 from collections import defaultdict
-import json
 
 from absl import app, flags
 from tqdm import tqdm 
 import concurrent.futures
 
 
-import pandas as pd, numpy as np, matplotlib.pyplot as plt
+import pandas as pd, numpy as np
 
 import sys 
 sys.path.insert(1, "../")
-from workloads.util import use_results, use_dataset, read_config, log_dataset
-from workloads.queue import UserEventQueue, Policy
+from workloads.util import use_results, use_dataset
+from workloads.record_queue import UserEventQueue, Policy
 
 FLAGS = flags.FLAGS
 
@@ -258,7 +255,7 @@ def main(argv):
 
     limit = None
     
-    policies = ["min_past"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = [Policy.MIN_PAST, Policy.QUERY_PROPORTIONAL, Policy.TOTAL_ERROR_COLD, Policy.MAX_PENDING, Policy.MIN_PAST, Policy.ROUND_ROBIN]
     #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
     updates_per_ts = [3, 4, 5, 8]

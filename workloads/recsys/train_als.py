@@ -2,27 +2,22 @@ import pandas as pd
 import os
 from scipy.sparse import coo_matrix
 from scipy.sparse import dok_matrix
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
-from pyspark.sql import SparkSession
-from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.recommendation import ALS
 
 from sklearn.metrics import mean_squared_error
 
 import pickle
-from collections import defaultdict
-import json
 
 from tqdm import tqdm 
 import concurrent.futures
 
 from absl import app, flags
-import pandas as pd, numpy as np, matplotlib.pyplot as plt
+import pandas as pd, numpy as np
 
 import sys 
 sys.path.insert(1, "../")
-from workloads.util import use_results, use_dataset, read_config, log_dataset
+from workloads.util import use_results, use_dataset
 
 FLAGS = flags.FLAGS
 
@@ -204,7 +199,7 @@ def main(argv):
     # store past updates 
     print("Saving past updates..")
     past_updates = {uid: ratings.getrow(uid).size for uid in uids}
-    #pickle.dump(past_updates, open(f"{result_dir}/past_updates_{split}.pkl", "wb"))
+    pickle.dump(past_updates, open(f"{result_dir}/past_updates_{split}.pkl", "wb"))
     
     
     max_iter = 50
