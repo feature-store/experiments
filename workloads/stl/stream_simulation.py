@@ -1,23 +1,19 @@
-import json
 import time
 from collections import defaultdict
 import os
-from glob import glob
 
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from absl import app, flags
-from sktime.performance_metrics.forecasting import mean_squared_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.forecasting.stl import STLForecast
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 
 from tqdm import tqdm
-from statsmodels.tsa.seasonal import STL
 
-from util import use_results, use_dataset, read_config, log_dataset, log_results
-from record_queue import UserEventQueue, Policy
+from workloads.util import use_results, use_dataset, log_results
+from workloads.record_queue import UserEventQueue, Policy
 
 from absl import app, flags
 
@@ -29,7 +25,7 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "num_keys",
-    default=10,
+    default=67,
     help="Number of keys to run on"
 )
 flags.DEFINE_integer(
@@ -166,13 +162,12 @@ def read_data(dataset_dir):
     return data
 
 def main(argv):
-    runtime = [24]
-    #runtime = [1000000, 24, 12, 4, 2, 1, 0]
+    runtime = [1000000, 24, 12, 4, 2, 1, 0]
     policies = [Policy.ROUND_ROBIN, Policy.TOTAL_ERROR]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
-    dataset_dir = use_dataset("yahoo/A1", True)
+    dataset_dir = use_dataset("yahoo/A1")
 
     # aggregate data structures
     results_df = pd.DataFrame()
