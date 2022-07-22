@@ -63,7 +63,7 @@ def simulate(data, start_ts, runtime, policy):
 
             # policy scoring
             t = ts - last_time
-            if policy == "total_error" and len(predictions[key]) > 1 and t > 1:
+            if policy == Policy.TOTAL_ERROR and len(predictions[key]) > 1 and t > 1:
                 e = mean_absolute_scaled_error(
                         np.array(values[key][-t:]), 
                         np.array(predictions[key][-t:]), 
