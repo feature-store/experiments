@@ -1,9 +1,7 @@
 import pandas as pd
 import time
 import concurrent.futures
-from scipy.sparse import coo_matrix
-from scipy.sparse import dok_matrix
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 
 import time
@@ -12,18 +10,18 @@ from sklearn.metrics import mean_squared_error
 
 import pickle
 from collections import defaultdict
-import json
 
 from absl import app, flags
 from tqdm import tqdm 
 import concurrent.futures
 
 
-import pandas as pd, numpy as np, matplotlib.pyplot as plt
+import pandas as pd, numpy as np
 
 import sys 
 sys.path.insert(1, "../")
-from workloads.util import use_results, use_dataset, read_config, log_dataset
+from workloads.util import use_results, use_dataset
+from workloads.record_queue import RecordQueue, Policy
 
 FLAGS = flags.FLAGS
 
@@ -94,7 +92,7 @@ def update_user(user_id, user_data, movie_features, d=50, runtime_file=None):
     
     return np.append(model.coef_, model.intercept_)
 
-def loss(ratings): 
+def loss(ratings, user_features, movie_features): 
     y_pred = []
     y_true = []
     for item in ratings.items():
@@ -110,111 +108,6 @@ def predict_user_movie_rating(user_feature, movie_feature, d=50):
     if p > 5: 
         return 5
     return p
-
-class UserEventQueue: 
-    
-    """
-    Event queue that selects group of user updates
-    (note: we can have another implementation which triggers a bunch of updates together)
-    """
-    
-    def __init__(self, num_keys, policy, past_updates): 
-        self.policy = policy 
-        self.num_keys = num_keys
-        
-        # metric tracking
-        self.total_error = np.zeros((num_keys))
-        self.past_updates = past_updates
-        self.queue = defaultdict(list)
-        self.staleness = defaultdict(lambda: 0)
-        self.last_key = defaultdict(lambda: 0)
-
-        # new baselines 
-        self.past_queries = defaultdict(lambda: 0) 
-        
-    def push(self, uid, mid, rating, user_features, movie_features): 
-        
-        # calcualte error 
-        pred = predict_user_movie_rating(user_features[uid], movie_features[mid])
-        error = abs(pred - rating) #error*error # square 
-        
-        if uid not in self.past_updates and self.policy == "total_error_cold": # unseen keys start with high total error
-            self.total_error[uid] = 1000000
-        else:
-            # update per key 
-            self.total_error[uid] += error
-        self.queue[uid].append((uid, mid, rating))
-
-        # TODO: try moving existing keys to front? 
-        self.last_key[uid] = time.time()
-        self.past_queries[uid] += 1
-        
-    def arg_max(self, data_dict): 
-        max_key = None
-        max_val = None
-        valid_keys = 0
-        for key in self.queue.keys():
-            
-            # cannot select empty queue 
-            if len(self.queue[key]) <= 0: 
-                continue 
-                
-            valid_keys += 1
-            value = data_dict[key]
-            if max_key is None or max_val <= value: 
-                assert key is not None, f"Invalid key {data_dict}"
-                max_key = key
-                max_val = value
-        return max_key, max_val
-        
-        
-    def choose_key(self): 
-        if self.policy == "total_error_cold" or self.policy == "total_error":
-            key = self.arg_max(self.total_error)
-        elif self.policy == "last_query":
-            key = self.arg_max(self.last_key)
-        elif self.policy == "max_pending":
-            key = self.arg_max({key: len(self.queue[key]) for key in self.queue.keys()})
-        elif self.policy == "min_past": 
-            key = self.arg_max({key: 1/(self.past_updates.setdefault(key, 0)+1) for key in self.queue.keys()})
-        elif self.policy == "round_robin": 
-            key = self.arg_max(self.staleness)
-        elif self.policy == "query_proportional": 
-            key = self.arg_max(self.past_queries)
-        elif self.policy == "batch":
-            key = self.arg_max(self.staleness) # doensn't matter
-        else: 
-            raise ValueError("Invalid policy")
-       
-        assert key is not None or sum([len(v) for v in self.queue.values()]) == 0, f"Key is none, {self.queue}"
-        return key 
-    
-    def pop(self): 
-        key, score = self.choose_key()
-        #print(key, score, self.past_updates.setdefault(key, 0))
-        if key is None:
-            #print("no updates", self.queue)
-            return None 
-        events = self.queue[key]
-        self.queue[key] = []
-
-        # update metrics 
-        for k in self.queue.keys():
-            self.staleness[k] += 1
-        self.staleness[key] = 0
-        self.total_error[key] = 0
-        
-        # TODO: this is wrong
-        self.past_updates[key] = self.past_updates.setdefault(key, 0) + len(events)
-            
-        return key 
-
-    def size(self): 
-        size = 0
-        for key in self.queue.keys(): 
-            if len(self.queue[key]) > 0:
-                size += 1
-        return size
 
 def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50, split=0.5): 
 
@@ -261,14 +154,13 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     if limit is None: 
         limit = len(list(data.keys()))
 
-    queue = UserEventQueue(user_features.shape[0], policy, past_updates) 
+    record_queue = RecordQueue(user_features.shape[0], policy, past_updates)
     #for ts in tqdm(list(data.keys())[:limit]): 
     next_ts = 0
     update_budget = 0
     for ts in list(data.keys())[:limit]: 
 
         # process events
-        updated_users = set([])
         for event in data[ts]:
 
             uid = event["user_id"]
@@ -276,22 +168,23 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             rating = event["rating"]
 
             ratings[uid, mid] = rating 
-            queue.push(uid, mid, rating, user_features, movie_features)
-            #print("orig loss:", loss(ratings))
-            y_pred.append(predict_user_movie_rating(user_features[uid], movie_features[mid]))
+            predicted_rating = predict_user_movie_rating(user_features[uid], movie_features[mid])
+            y_pred.append(predicted_rating)
             y_true.append(rating)
+            error_score = rating - predicted_rating
+            record_queue.push(uid, error_score)
+            #print("orig loss:", loss(ratings))
             timestamps.append(ts)
             users.append(uid)
             movies.append(mid)
 
-
-        if policy == "batch":
+        if policy == Policy.BATCH:
             update_budget += updates_per_ts
-            if queue.size() <= update_budget:
+            if record_queue.size() <= update_budget:
 
                 # update all uids in queue 
                 while True: 
-                    uid = queue.pop()
+                    uid = record_queue.pop()
                     if uid is None: 
                         break
                     user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
@@ -301,7 +194,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
         elif updates_per_ts is not None and updates_per_ts >= 1:
             
             for i in range(updates_per_ts): 
-                uid = queue.pop()
+                uid = record_queue.pop()
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
@@ -311,7 +204,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                 # TODO: make sure overall loss is decreasing (training error)
         elif updates_per_ts is not None: 
             if ts >= next_ts:
-                uid = queue.pop()
+                uid = record_queue.pop()
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
@@ -362,7 +255,7 @@ def main(argv):
 
     limit = None
     
-    policies = ["min_past"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = [Policy.MIN_PAST, Policy.QUERY_PROPORTIONAL, Policy.TOTAL_ERROR_COLD, Policy.MAX_PENDING, Policy.MIN_PAST, Policy.ROUND_ROBIN]
     #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
     updates_per_ts = [3, 4, 5, 8]

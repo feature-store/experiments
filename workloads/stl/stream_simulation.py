@@ -1,22 +1,19 @@
-import json
 import time
 from collections import defaultdict
 import os
-from glob import glob
 
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from absl import app, flags
-from sktime.performance_metrics.forecasting import mean_squared_scaled_error
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.forecasting.stl import STLForecast
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 
 from tqdm import tqdm
-from statsmodels.tsa.seasonal import STL
 
-from workloads.util import use_results, use_dataset, read_config, log_dataset, log_results
+from workloads.util import use_results, use_dataset, log_results
+from workloads.record_queue import RecordQueue, Policy
 
 from absl import app, flags
 
@@ -45,11 +42,10 @@ def simulate(data, start_ts, runtime, policy):
     :runtime: runtime of map function 
     :policy: policy to select keys 
     """
-
+    record_queue = RecordQueue(FLAGS.num_keys+1, policy, [])
     predictions = defaultdict(list)
     values = defaultdict(list)
     staleness = defaultdict(list)
-    score = [0 for i in range(1, FLAGS.num_keys+1, 1)]
     update_times = defaultdict(list)
    
     # start with initial set of models
@@ -67,33 +63,30 @@ def simulate(data, start_ts, runtime, policy):
 
             # policy scoring
             t = ts - last_time
-            if policy == "total_error" and len(predictions[key]) > 1 and t > 1: 
+            if policy == Policy.TOTAL_ERROR and len(predictions[key]) > 1 and t > 1:
                 e = mean_absolute_scaled_error(
-                    np.array(values[key][-t:]), 
-                    np.array(predictions[key][-t:]), 
-                    y_train=np.array(values[key][-t:]), 
-                    sp=1
+                        np.array(values[key][-t:]), 
+                        np.array(predictions[key][-t:]), 
+                        y_train=np.array(values[key][-t:]), 
+                        sp=1
                 )
-                score[key-1] = e * t # use total, not mean 
-            elif policy == "round_robin": 
-                score[key-1] += 1
-            elif policy == "max_staleness": 
-                score[key-1] = ts-last_time
+            else:
+                e = 0
+            record_queue.push(key-1, e*t)
 
         # can update model
         while ts >= next_update_time: 
             # pick max error key 
-            key = np.array(score).argmax() + 1
+            key = record_queue.pop() + 1
             #print(key, score)
 
-            if max(score) == 0: # nothing to update
+            if key is None: # nothing to update
                 print("nothing to update", ts)
                 break
             
             # mark as update time for key 
             update_times[key].append(ts) 
             last_model[key] = get_model(data, key, ts)
-            score[key-1] = 0
             
             # update next update time 
             next_update_time += runtime
@@ -170,7 +163,7 @@ def read_data(dataset_dir):
 
 def main(argv):
     runtime = [1000000, 24, 12, 4, 2, 1, 0]
-    policy = ["round_robin", "total_error"]
+    policies = [Policy.ROUND_ROBIN, Policy.TOTAL_ERROR]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
@@ -184,7 +177,7 @@ def main(argv):
     data = read_data(dataset_dir)
     
     for r in runtime: 
-        for p in policy: 
+        for p in policies: 
             
             update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
             e = error(df)
