@@ -98,8 +98,6 @@ class Ridge:
         X = X.rename(None)
         y = y.rename(None).view(-1,1)
         assert X.shape[0] == y.shape[0], "Number of X and y rows don't match"
-        if self.fit_intercept:
-            X = torch.cat([torch.ones(X.shape[0], 1), X], dim = 1)
         # Solving X*w = y with Normal equations:
         # X^{T}*X*w = X^{T}*y 
         lhs = X.T @ X 
@@ -107,13 +105,11 @@ class Ridge:
         if self.alpha == 0:
             self.w, _ = torch.lstsq(rhs, lhs)
         else:
-            ridge = self.alpha*torch.eye(lhs.shape[0])
+            ridge = self.alpha*torch.eye(lhs.shape[0]).cuda()
             self.w = torch.linalg.lstsq(rhs, lhs + ridge).solution
             
     def predict(self, X: torch.tensor) -> None:
         X = X.rename(None)
-        if self.fit_intercept:
-            X = torch.cat([torch.ones(X.shape[0], 1), X], dim = 1)
         return X @ self.w
 
 # ratings is an n by m sparse matrix
@@ -123,19 +119,20 @@ def update_user(movie_features, user_id, user_data, d=50):
     values = user_data[1]
 
     k = len(movie_ids)
-    X = movie_features[movie_ids, :d] # k x d matrix 
+    X = torch.index_select(movie_features, 0, movie_ids)
+    #X = movie_features[movie_ids]
+    #X = movie_features[movie_ids, :d] # k x d matrix 
 
     # The movie bias is the d+1 (last column) of the movie features
-    movie_biases = movie_features[movie_ids, -1] # k x 1 matrix
+    #movie_biases = movie_features[movie_ids, -1] # k x 1 matrix
     # Subtract off the movie biases
-    Y = values - movie_biases
+    Y = values #- movie_biases
 
     # Use Sklearn to solve l2 regularized regression problem
     #model = Ridge(alpha=alpha) #Maybe use RidgeCV() instead so we don't tune lambda
-    model = Ridge(alpha=0.001, fit_intercept=True)
+    model = Ridge(alpha=0.001, fit_intercept=False)
     model.fit(X, Y)
-    
-    return torch.cat(model.w_, torch.ones(X.shape[0], 1))
+    return model.w
 
 def update_movie(user_features, movie_id, movie_data, d=50):
     
@@ -143,32 +140,34 @@ def update_movie(user_features, movie_id, movie_data, d=50):
     values = movie_data[1]
 
     k = len(user_ids)
-    X = user_features[user_ids, :d] # k x d matrix 
-
+    #X = user_features[user_ids] #:d] # k x d matrix 
+    X = torch.index_select(user_features, 0, user_ids)
     # The movie bias is the d+1 (last column) of the movie features
-    user_biases = user_features[user_ids, -1] # k x 1 matrix
     # Subtract off the movie biases
-    Y = values - user_biases
+    Y = values #- user_biases
 
     # Use Sklearn to solve l2 regularized regression problem
-    model = Ridge(alpha=0.001, fit_intercept=True)
+    model = Ridge(alpha=0.001, fit_intercept=False)
     model.fit(X, Y)
     
     #movie_features[movie_id] = np.append(model.coef_, model.intercept_)
-
-    return torch.cat(model.w_, torch.ones(X.shape[0], 1))
+    return model.w
 
 def loss(ratings, user_features, movie_features): 
     y_pred = []
     y_true = []
+    errors = 0
     for item in ratings.items():
-        y_pred.append(predict_user_movie_rating(user_features[item[0][0], :], movie_features[item[0][1], :]))
+        pred = predict_user_movie_rating(user_features[item[0][0], :], movie_features[item[0][1], :])
+        print(pred)
+        y_pred.append(pred)
         y_true.append(item[1])
-    return mean_squared_error(y_true, y_pred)
+        errors += ((item[1] - y_pred[-1]) ** 2)
+    return errors ** .5
     
 
 def predict_user_movie_rating(user_feature, movie_feature, d=50):
-    p = user_feature[:d] @ movie_feature[:d] + user_feature[-1] + movie_feature[-1] 
+    p = user_feature @ movie_feature
     if p < 1: p = 1
     if p > 5: p = 5
     return p 
@@ -239,10 +238,10 @@ def main(argv):
     movie_data_store = dict()
     for uid in tqdm(uids):
         userRow = ratings.getrow(uid).tocoo()
-        user_data_store[uid] = (torch.from_numpy(userRow.row).type(torch.LongTensor).cuda(), torch.from_numpy(userRow.data).cuda())
+        user_data_store[uid] = (torch.from_numpy(userRow.row).cuda(), torch.from_numpy(userRow.data).double().cuda())
     for mid in tqdm(mids):
         movieRow = ratings.getrow(mid).tocoo()
-        movie_data_store[mid] = (torch.from_numpy(movieRow.row).type(torch.LongTensor).cuda(), torch.from_numpy(movieRow.data).cuda())
+        movie_data_store[mid] = (torch.from_numpy(movieRow.row).cuda(), torch.from_numpy(movieRow.data).double().cuda())
 
     
     
@@ -253,21 +252,15 @@ def main(argv):
         with concurrent.futures.ProcessPoolExecutor(workers) as executor:
             for uid in tqdm(uids):
                 user_data = user_data_store[uid]
+                user_features[uid] = update_user(movie_features, uid, user_data)
                 #print(update_user(uid, movie_ids, values))
-                futures.append(executor.submit(update_user, movie_features, uid, user_data))
-                
-        for uid, f in tqdm(zip(uids, futures)):
-            user_features[uid] = f.result()
-            
+                #futures.append(executor.submit(update_user, movie_features, uid, user_data))
+        #for uid, f in tqdm(zip(uids, futures)):
+            #user_features[uid] = f.result()
         print("update movies...")
-        futures = []
-        with concurrent.futures.ProcessPoolExecutor(workers) as executor:
-            for mid in tqdm(mids): 
-                movie_data = movie_data_store[mid]
-                futures.append(executor.submit(update_movie, user_features, mid, movie_data))
-    
-        for mid, f in tqdm(zip(mids, futures)):
-            movie_features[mid] = f.result()
+        for mid in tqdm(mids):
+            movie_data = movie_data_store[mid]
+            movie_features[mid] = update_movie(user_features, mid, movie_data)
         print("loss", loss(ratings, user_features, movie_features))
         
         pickle.dump(user_features, open(user_features_file, "wb"))
