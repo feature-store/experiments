@@ -1,4 +1,5 @@
 import pandas as pd
+import random
 import time
 import concurrent.futures
 from scipy.sparse import coo_matrix
@@ -183,6 +184,12 @@ class UserEventQueue:
             key = self.arg_max(self.past_queries)
         elif self.policy == "batch":
             key = self.arg_max(self.staleness) # doensn't matter
+        elif self.policy == "random": 
+            options = [k for k in self.queue.keys() if len(self.queue[k]) > 0]
+            if len(options) == 0: 
+                key = (None, None)
+            else: 
+                key = (random.choice(options), 0)
         else: 
             raise ValueError("Invalid policy")
        
@@ -362,10 +369,10 @@ def main(argv):
 
     limit = None
     
-    policies = ["min_past"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = ["random"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
     #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
-    updates_per_ts = [3, 4, 5, 8]
+    updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8]
     #updates_per_ts = [3]
     #ts_factors = [60, 60*60, 60*60*24]
     #ts_factors = [10, 100]

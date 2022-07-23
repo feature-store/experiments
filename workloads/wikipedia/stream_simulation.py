@@ -1,4 +1,5 @@
 import json 
+import random
 import pickle
 import time
 from collections import defaultdict
@@ -22,31 +23,119 @@ from dense_retriever_stream import StreamingModel
 from absl import app, flags
 
 FLAGS = flags.FLAGS
-flags.DEFINE_integer(
+flags.DEFINE_float(
     "updates",
-    default=10,
+    default=0,
     help="Updates per timestep"
+)
+flags.DEFINE_string(
+    "policy",
+    default=None,
+    help="Update policy"
 )
 
 class Queue: 
+    
+    """
+    Event queue that selects group of user updates
+    (note: we can have another implementation which triggers a bunch of updates together)
+    """
+    
+    def __init__(self, policy):
+        self.policy = policy 
+        
+        # metric tracking
+        if policy == "total_error_cold": 
+            self.total_error = defaultdict(lambda: 1000000)
+        else: 
+            self.total_error = defaultdict(lambda: 0)
+        self.queue = defaultdict(lambda: None)
+        self.staleness = defaultdict(lambda: 0)
+        self.last_key = defaultdict(lambda: 0)
+        self.past_updates = defaultdict(lambda: 0)
 
-    def __init__(self): 
-        self.queue = [] 
+        # new baselines 
+        self.past_queries = defaultdict(lambda: 0) 
 
     def push(self, key, value): 
-        self.queue.append(value)
-
-    def pop(self): 
-        if len(self.queue) == 0: 
+        self.queue[key] = value
+        self.last_key[key] = time.time()
+        
+    def arg_max(self, data_dict): 
+        max_key = None
+        max_val = None
+        valid_keys = 0
+        for key in self.queue.keys():
+            
+            # cannot select empty queue 
+            if self.queue[key] is None:
+                continue 
+                
+            valid_keys += 1
+            value = data_dict[key]
+            if max_key is None or max_val <= value: 
+                assert key is not None, f"Invalid key {data_dict}"
+                max_key = key
+                max_val = value
+        return max_key, max_val
+        
+        
+    def choose_key(self): 
+        if self.policy == "total_error_cold" or self.policy == "total_error":
+            key = self.arg_max(self.total_error)
+        elif self.policy == "last_query":
+            key = self.arg_max(self.last_key)
+        elif self.policy == "max_pending":
+            key = self.arg_max({key: len(self.queue[key]) for key in self.queue.keys()})
+        elif self.policy == "min_past": 
+            key = self.arg_max({key: 1/(self.past_updates.setdefault(key, 0)+1) for key in self.queue.keys()})
+        elif self.policy == "round_robin": 
+            key = self.arg_max(self.staleness)
+        elif self.policy == "query_proportional": 
+            key = self.arg_max(self.past_queries)
+        elif self.policy == "batch":
+            key = self.arg_max(self.staleness) # doensn't matter
+        elif self.policy == "random": 
+            options = [k for k in self.queue.keys() if self.queue[k] is not None]
+            key = (random.choice(options), 0)
+        else: 
+            raise ValueError("Invalid policy")
+       
+        assert key is not None or sum([len(v) for v in self.queue.values()]) == 0, f"Key is none, {self.queue}"
+        return key 
+    
+    def pop(self, ts): 
+        key, score = self.choose_key()
+        if key is None:
             return None 
+        event = self.queue[key]
+        self.queue[key] = None
 
-        event = self.queue[0]
-        self.queue = self.queue[1:]
+        self.staleness[key] = 0
+        self.total_error[key] = 0
+        self.past_queries[key] = 0
+        
         return event
+
+    def size(self): 
+        size = 0
+        for key in self.queue.keys(): 
+            if self.queue[key]:
+                size += 1
+        return size
+
+    def error(self, key, error): 
+        self.past_queries[key] += 1
+        self.total_error[key] += error
+
+    def timestep(self): 
+        for key in self.queue.keys(): 
+            self.staleness[key] += 1
+
 
 class Simulator: 
 
-    def __init__(self, updates): 
+    def __init__(self, policy, updates): 
         
         result_dir = "/data/wooders/ralf-vldb/results/wikipedia"
         dataset_dir = "/data/wooders/ralf-vldb/datasets/wikipedia"
@@ -72,14 +161,16 @@ class Simulator:
         self.init_data = json.load(open(init_data_file))
         self.embedding_version = {}
         for doc_id, diff in tqdm(self.init_data.items()):
-            print("REV", diff["revid"])
+            #print("REV", diff["revid"])
             self.process_update(doc_id, diff["file"], init=True)
             self.embedding_version[doc_id] = diff["revid"]
 
         # create update queue
-        self.queue = Queue()
+        self.queue = Queue(policy)
+        self.policy = policy 
 
         self.updates = updates
+        self.policy = policy 
 
  
     def embedding_path(self, revid, version="_new"):
@@ -100,16 +191,19 @@ class Simulator:
         )
 
         revid = self.embedding_version[doc_id]
-        print("Using version", revid, "init", self.init_data[doc_id]["revid"])
+        #print("Using version", revid, "init", self.init_data[doc_id]["revid"])
         pred = self.stream_model.predict_single_doc(doc_questions_file, revid, doc_id)
-        #print("PREDICTION", pred)
+        for q, p in zip(questions, pred): 
+            p["doc_id"] = q["doc_id"]
+            p["revid"] = q["revid"]
+            p["actual_revid"] = revid
+            p["ts"] = ts
         return pred
 
 
     def process_update(self, doc_id, filename, init=False): 
 
         # TODO: add cache
-        print(filename)
 
         revid_old = filename.replace(".json", "").split("_")[1]
         revid = filename.replace(".json", "").split("_")[0]
@@ -131,64 +225,79 @@ class Simulator:
             self.embedding_version[doc_id] = revid
 
         # load embedding
-        print(embedding_filename)
+        #print(embedding_filename)
         embedding_data = pickle.load(open(embedding_filename, "rb"))
         passage_embeddings = embedding_data["embeddings"]
         passage_texts = embedding_data["passages"]
+        assert len(passage_embeddings) == len(passage_texts)
+
+        assert len(passage_embeddings) > 0, f"Empty embeddings {filename}, {embedding_filename}"
 
         # create input files 
         contex_file = f"{self.tmp_dir}/dpr_ctx_{revid}_{doc_id}"
         text_file = f"{self.tmp_dir}/passages_{revid}_{doc_id}.tsv"
 
-        text_df = pd.DataFrame(
-            [[i, passage_texts[i], "", doc_id] for i in range(len(passage_texts))]
-        )
-        text_df.to_csv(text_file, sep="\t", index=False, header=False)
+        if not os.path.exists(contex_file):
 
-        passage_ctx = []
-        for i in range(len(passage_embeddings)):
-            passage_ctx.append([i, passage_embeddings[i]])
-        pickle.dump(np.array(passage_ctx, dtype=object), open(contex_file, "wb"))
+            text_df = pd.DataFrame(
+                [[i, passage_texts[i], "", doc_id] for i in range(len(passage_texts))]
+            )
+            text_df.to_csv(text_file, sep="\t", index=False, header=False)
 
-        assert len(passage_ctx) == len(passage_texts)
-        assert len(passage_embeddings) == len(passage_texts)
+            passage_ctx = []
+            for i in range(len(passage_embeddings)):
+                passage_ctx.append([i, passage_embeddings[i]])
+            pickle.dump(np.array(passage_ctx, dtype=object), open(contex_file, "wb"))
+
+            assert len(passage_ctx) == len(passage_texts)
+
 
         
 
-    def run(self): 
+    def run(self, results_dir): 
 
-        print("questions", len(self.questions))
-        print("edits", len(self.edits))
 
         plan_results = [] #defaultdict(list)
-        for ts in range(len(self.questions))[:-1000]: 
-            timestep = ts / 100
+        updates = []
+        budget = 0
+        for ts in range(len(self.questions)): 
 
-            #print(self.questions[ts])
-            #print(self.edits[ts])
+            # update budget
+            budget += self.updates
 
-
-            # process edits
+            # process questions
             for doc_id, doc_questions in self.questions[ts].items(): 
-                for q in doc_questions: 
-                    print(q)
-                    print(ts, q["ts_min"])
                 pred = self.predict_single(doc_id, doc_questions, ts)
+                for p in pred: 
+
+                    self.queue.error(doc_id, 1-max(p['doc_hits'][:1]))
+                    # append results
                 plan_results += pred
-                #plan_results = pred
 
             # process questions:
+            print("Updates", len(list(self.edits[ts].items())), "budget", budget)
             for key, revs in self.edits[ts].items(): 
                 for rev in revs: 
                     self.queue.push(key, {"doc_id": key, "filename": rev, "ts": ts})
 
             # process updates
-            for _ in range(self.updates): 
-                event = self.queue.pop()
-                if not event: break
-                self.process_update(event["doc_id"], event["filename"])
+            if (self.policy == "batch" and budget >= self.queue.size()) or self.policy != "batch": 
+                while budget > 1: 
+                    event = self.queue.pop(ts)
+                    if not event: break
+                    self.process_update(event["doc_id"], event["filename"])
+                    event["update_time"] = ts
+                    updates.append(event)
+                    budget -= 1
 
-            if len(plan_results) > 0:
+            # increment queue timestep
+            self.queue.timestep()
+
+
+            if len(plan_results) > 0 and len(plan_results) % 100 == 0:
+
+                pd.DataFrame(plan_results).to_csv(f"{results_dir}/results_{self.policy}_{self.updates}.csv")
+                pd.DataFrame(updates).to_csv(f"{results_dir}/updates_{self.policy}_{self.updates}.csv")
 
                 top1, top5, top10 = 0, 0, 0
                 doc_size = 0 
@@ -208,80 +317,12 @@ class Simulator:
                            'doc_size': doc_size }
                 print(ts, "RESULT", results)
 
-                
-
-
-
-
-
-
 
 def main(argv):
 
-    sim = Simulator(100) 
-    sim.run()
-    #runtime = [24, 12, 4, 2, 1, 0]
-    #runtime = [4, 6, 8, 12, 24] #[1, 2, 3]
-    policy = ["round_robin", "total_error", "batch"]
-    #runtime = [0, 1000000]
-    runtime = [0.05, 0.02] #0.5, 0.2, 0.1]
-    name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
-
-    result_dir = use_results(name)
-    dataset_dir = use_dataset("yahoo/A1")
-
-    # aggregate data structures
-    results_df = pd.DataFrame()
-    updates_df = pd.DataFrame()
-    df_all = pd.DataFrame()
-
-    data = read_data(dataset_dir)
-    
-    for r in runtime: 
-        for p in policy: 
-
-            try:
-                update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
-            except Exception as e:
-                print(e) 
-                continue
-            e = error(df)
-            s = df.staleness.mean()
-            u = sum([len(v) for v in update_times.values()])
-           
-            r_df = pd.DataFrame([[r, p, e, s, u]])
-            r_df.columns = ["runtime", "policy", "total_error", "average_staleness", "total_updates"]
-            u_df = pd.DataFrame([
-                [r, p, k, i, update_times[k][i]]
-                for k, v in update_times.items() for i in range(len(v))
-            ])
-           
-            # write experiment CSV
-            folder = f"{p}_{r}_A1"
-            os.makedirs(f"{result_dir}/{folder}", exist_ok=True)
-            df.to_csv(f"{result_dir}/{folder}/simulation_predictions.csv")
-            r_df.to_csv(f"{result_dir}/{folder}/simulation_result.csv")
-            u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
-            print(u_df)
-            u_df.columns = ["runtime", "policy", "key", "i", "time"]
-            u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
-           
-            # aggregate data 
-            df_all = pd.concat([df_all, df])
-            results_df = pd.concat([results_df, r_df])
-            updates_df = pd.concat([updates_df, u_df])
-            print("done", folder)
-
-	
-            
-    results_df.to_csv(f"{result_dir}/simulation_results.csv")
-    while True:
-        try:
-            log_results(name)
-            break
-        except Exception as e:
-            print(e) 
-            time.sleep(5)
+    sim = Simulator(FLAGS.policy, FLAGS.updates) 
+    result_dir = "/data/wooders/ralf-vldb/results/wikipedia/stream_simulation/"
+    sim.run(result_dir)
 
 
 

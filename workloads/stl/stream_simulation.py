@@ -1,4 +1,4 @@
-import json
+import json 
 import time
 from collections import defaultdict
 import os
@@ -55,6 +55,7 @@ def simulate(data, start_ts, runtime, policy):
     # start with initial set of models
     last_model = {key: get_model(data, key, start_ts) for key in range(1, FLAGS.num_keys+1, 1)} 
     next_update_time = start_ts #+ runtime # time when model is completed
+    last_update_time = start_ts
 
     for ts in tqdm(range(start_ts, FLAGS.max_len, 1)):
 
@@ -80,23 +81,40 @@ def simulate(data, start_ts, runtime, policy):
             elif policy == "max_staleness": 
                 score[key-1] = ts-last_time
 
-        # can update model
-        while ts >= next_update_time: 
-            # pick max error key 
-            key = np.array(score).argmax() + 1
-            #print(key, score)
+        if policy == "batch": 
+            print(ts - last_update_time, runtime, len(score))
+            if (ts - last_update_time) / runtime >= len(score): 
 
-            if max(score) == 0: # nothing to update
-                print("nothing to update", ts)
-                break
-            
-            # mark as update time for key 
-            update_times[key].append(ts) 
-            last_model[key] = get_model(data, key, ts)
-            score[key-1] = 0
-            
-            # update next update time 
-            next_update_time += runtime
+                # update all keys
+                for i in range(len(score)): 
+                    key = i + 1
+
+                    # mark as update time for key 
+                    update_times[key].append(ts) 
+                    last_model[key] = get_model(data, key, ts)
+
+                last_update_time = ts
+        else:
+
+            # can update model
+            while ts >= next_update_time: 
+                # pick max error key 
+                key = np.array(score).argmax() + 1
+                #print(key, score)
+
+                if max(score) == 0: # nothing to update
+                    print("nothing to update", ts)
+                    break
+                
+                # mark as update time for key 
+                update_times[key].append(ts) 
+                last_model[key] = get_model(data, key, ts)
+                score[key-1] = 0
+                
+                # update next update time 
+                next_update_time += runtime
+
+        print(policy, update_times.keys())
 
     results_df = pd.concat([
         pd.DataFrame({
@@ -150,8 +168,7 @@ def get_model(data, key, ts):
     last_model = STLForecast(
         chunk, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=24
     ).fit()
-    print(time.time() - st)
-    return {"model": last_model, "forecast": last_model.forecast(2000), "data": chunk, "time": ts}
+    return {"model": last_model, "forecast": last_model.forecast(2000), "data": chunk, "time": ts, "runtime": time.time() - st}
 
 def read_data(dataset_dir):
     """
@@ -169,8 +186,11 @@ def read_data(dataset_dir):
     return data
 
 def main(argv):
-    runtime = [1000000, 24, 12, 4, 2, 1, 0]
-    policy = ["round_robin", "total_error"]
+    #runtime = [24, 12, 4, 2, 1, 0]
+    #runtime = [4, 6, 8, 12, 24] #[1, 2, 3]
+    policy = ["round_robin", "total_error", "batch"]
+    #runtime = [0, 1000000]
+    runtime = [0.05, 0.02] #0.5, 0.2, 0.1]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
@@ -185,8 +205,12 @@ def main(argv):
     
     for r in runtime: 
         for p in policy: 
-            
-            update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
+
+            try:
+                update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
+            except Exception as e:
+                print(e) 
+                continue
             e = error(df)
             s = df.staleness.mean()
             u = sum([len(v) for v in update_times.values()])

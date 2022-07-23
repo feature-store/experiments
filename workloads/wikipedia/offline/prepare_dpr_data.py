@@ -186,7 +186,7 @@ def offline_eval(plan_json_path, exp_id, compute_embeddings=True):
     print("EMBED", embed_versions.keys())
     print("Num refits", count, len(missing))
 
-    embed_filename = "embed_versions.pkl"
+    ##embed_filename = "embed_versions.pkl"
     pickle.dump(embed_versions, open(embed_filename, "wb"))
     return embed_filename
 
