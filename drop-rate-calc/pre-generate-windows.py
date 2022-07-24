@@ -14,21 +14,27 @@ SLIDE_SIZE = 288
 TOTAL_LENGTH = 8639
 FINAL_IDX = 8638
 DEBUG_MODE = False
-RESULT_DIR = "/data/azure-windows"
+RESULT_DIR = "/data/azure-windows-v2"
 SAMPLE_SIZE = 275077
 
 
+os.makedirs(RESULT_DIR, exist_ok=True)
 conn = duckdb.connect(
     "/home/ubuntu/azure_long_series_with_ts_array.duckdb", read_only=True
 )
-conn.execute("PRAGMA enable_progress_bar")
-cursor = conn.execute(
-    """
-SELECT int_id, avg_cpu
+conn.execute("set enable_progress_bar=true")
+df = (
+    conn.execute(
+        """
+SELECT int_id, ts_array, timestamp[1] as start_idx, timestamp[-1] as end_idx
   FROM readings
--- USING SAMPLE 1000
 """
+    )
+    .fetch_record_batch()
+    .read_next_batch()
+    .to_pandas()
 )
+assert len(df) == SAMPLE_SIZE
 
 
 def fit(arr):
@@ -59,11 +65,12 @@ def window(arr):
     return start_idx_to_window
 
 
-def map_row(row):
-    int_id, avg_cpu = row
+def map_row(inp):
+    _, row = inp
+    avg_cpu = row.ts_array[row.start_idx : row.end_idx + 1]
     entry = [
         {
-            "int_id": int_id,
+            "int_id": row.int_id,
             "start_idx": k,
             "window_arr": np.array(v, dtype="float32"),
             "forecast_arr": fit(v).astype("float32"),
@@ -71,8 +78,8 @@ def map_row(row):
         for k, v in window(avg_cpu).items()
     ]
     df = pd.DataFrame(entry)
-    df.to_parquet(os.path.join(RESULT_DIR, f"{int_id}.parquet"))
+    df.to_parquet(os.path.join(RESULT_DIR, f"{row.int_id}.parquet"))
 
 
 with Pool() as pool:
-    list(tqdm(pool.imap(map_row, cursor.fetchall()), total=SAMPLE_SIZE))
+    list(tqdm(pool.imap(map_row, df.iterrows()), total=SAMPLE_SIZE))
