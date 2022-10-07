@@ -2,6 +2,7 @@
 root_dir = /home/eecs/wooders/experiments
 data_dir = /data/wooders/ralf-vldb/
 results_dir = %(data_dir)s/results
+plots_dir = %(data_dir)s/plots
 dataset_dir = %(data_dir)s/datasets
 credentials = %(root_dir)s/ralf-vldb.json
 aws_dir = vldb
