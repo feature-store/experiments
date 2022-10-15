@@ -10,9 +10,9 @@ Script to query the wikipedia API for recent edit IDS
 
 ## SET THESE
 #data_dir = "revisions/"
-data_dir = ""
+data_dir = "/data/devangjhabakh/wikipedia/wikipedia/recentchanges"
 #start_time = "2021-09-01T00:00:00Z" # todo - replace with current time
-start_time = "2022-09-01T02:45:57Z"
+start_time = "2022-10-01T02:45:57Z"
 end_time =  "2022-08-01T00:00:00Z" # timestamp to stop at 
 
 # setup API 
@@ -46,12 +46,15 @@ while dt_end < dt_start:
     PARAMS["rcstart"] = start_time
 
     # make request
+    print(PARAMS)
     R = S.get(url=URL, params=PARAMS)
     DATA = R.json()
-    #print(DATA)
 
     changes = DATA["query"]["recentchanges"]
     #print(DATA)
+    print(len(changes))
+    if len(changes) == 0:
+        dt_start = datetime.fromtimestamp(datetime.timestamp(dt_start) - 700)
     for change in changes:
 
         # note - "revid" should equal "parentid" for some later diff

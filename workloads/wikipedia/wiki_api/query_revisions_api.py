@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/python3
 import requests
 from datetime import datetime
@@ -14,14 +12,13 @@ Script to query all the document content version in a given time period
 # SET THESE
 titles_df = pd.read_csv("titles.csv")
 titles = titles_df["title"].tolist()
-data_dir = "revisions/"
+data_dir = "/data/devangjhabakh/wikipedia/wikipedia/revisions/"
 print("num titles", len(titles))
 
  
 # make sure this matches the other script
-start_time = "2021-01-01T00:00:00Z"# todo - replace with current time
-end_time = "2021-06-1T00:00:00Z" 
-
+start_time = "2022-10-01T02:45:57Z"
+end_time =  "2022-08-01T00:00:00Z" # timestamp to stop at 
 # setup API 
 S = requests.Session()
 URL = "https://en.wikipedia.org/w/api.php"
