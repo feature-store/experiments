@@ -33,4 +33,6 @@ optimal_plan_file = %(data_dir)s/optimal_plan.json
 stream_edits_file = %(data_dir)s/edit_stream.json
 stream_questions_file = %(data_dir)s/question_stream.json
 
-
+[wiki_api_config]
+start_time=2022-10-01T02:45:57Z
+end_time=2022-08-01T00:00:00Z

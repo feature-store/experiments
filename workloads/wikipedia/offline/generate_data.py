@@ -76,8 +76,8 @@ def get_titles(changes_file, titles_file, n=200):
     title_ids = set(changes_df[["title", "pageid"]].apply(tuple, axis=1).tolist())
 
     counts = changes_df.title.value_counts().to_frame()
-    print(counts)
-    top_titles = counts[counts["title"] > n]
+    top_titles = counts.nlargest(10000, "title")
+    print(top_titles)
     top_titles.columns = ["count"]
     top_titles["title"] = top_titles.index
     top_titles.to_csv(titles_file)
@@ -495,6 +495,10 @@ def search_answer(rev_file, embedding_dir, question):
             found_answer = True
     return found_answer
 
+def query_recentchanges_api(start_time, end_time, revisions_dir):
+    from wiki_api.query_recentchanges_api import query_recent_changes
+    query_recent_changes(start_time, end_time, revisions_dir)
+
 def check_dataset(
     titles_file,
     edits_file,
@@ -655,8 +659,12 @@ if __name__ == "__main__":
     stream_edits_file = config["simulation"]["stream_edits_file"]
     stream_questions_file = config["simulation"]["stream_questions_file"]
 
+    # wiki api calls config
+    start_time = config["wiki_api_config"]["start_time"]
+    end_time = config["wiki_api_config"]["end_time"]
+
     if args.run_query_recentchanges:
-        query_edit_stream(start_time, end_time, revisions_dir)
+        query_recentchanges_api(start_time, end_time, revisions_dir)
 
     if args.run_query_doc_versions:
         query_doc_versions(titles_file, start_time, end_time, raw_doc_dir)
