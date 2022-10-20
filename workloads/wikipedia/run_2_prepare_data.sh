@@ -1,6 +1,6 @@
 set -xe
 
-plan_dir=/data/wooders/ralf-vldb/results/wikipedia/plans
+plan_dir=/data/jeffcheng1234/ralf-vldb/results/wikipedia/plans
 
 for replicas in 1
 do

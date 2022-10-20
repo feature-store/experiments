@@ -47,7 +47,7 @@ def log_plans(run, config, plan_dir):
 def log_experiment(run, config):
     # log experiment output
     artifact = wandb.Artifact("prediction_results", type='dataset')
-    artifact.add_dir("/data/wooders/wikipedia/predictions")
+    artifact.add_dir("/data/jeffcheng1234/wikipedia/predictions")
     run.log_artifact(artifact)
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ import wandb
 # from concurrent.futures import ProcessPoolExecutor
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
-from generate_diffs import generate_sentence_level_diffs
-from embedding import generate_embeddings
+from preprocessing.generate_diffs import generate_sentence_level_diffs
+from preprocessing.embedding import generate_embeddings
 
 from log_data import log_files, log_pageview, log_simulation, log_questions
 

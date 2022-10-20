@@ -137,13 +137,13 @@ class Simulator:
 
     def __init__(self, policy, updates): 
         
-        result_dir = "/data/wooders/ralf-vldb/results/wikipedia"
-        dataset_dir = "/data/wooders/ralf-vldb/datasets/wikipedia"
+        result_dir = "/data/jeffcheng1234/ralf-vldb/results/wikipedia"
+        dataset_dir = "/data/jeffcheng1234/ralf-vldb/datasets/wikipedia"
         init_data_file = f"{dataset_dir}/init_data.json"
         stream_questions_file = f"{dataset_dir}/question_stream.json"
         stream_edit_file = f"{dataset_dir}/edit_stream.json"
 
-        self.tmp_dir = "/data/wooders/ralf-vldb/results/wikipedia/tmp"
+        self.tmp_dir = "/data/jeffcheng1234/ralf-vldb/results/wikipedia/tmp"
         self.embedding_dir = f"{result_dir}/embeddings"
         self.rev_dir = f"{result_dir}/diffs"
 
@@ -321,7 +321,7 @@ class Simulator:
 def main(argv):
 
     sim = Simulator(FLAGS.policy, FLAGS.updates) 
-    result_dir = "/data/wooders/ralf-vldb/results/wikipedia/stream_simulation/"
+    result_dir = "/data/jeffcheng1234/ralf-vldb/results/wikipedia/stream_simulation/"
     sim.run(result_dir)
 
 

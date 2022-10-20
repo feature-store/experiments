@@ -1,4 +1,4 @@
-data_dir=/data/devangjhabakh/wikipedia/wikipedia
+data_dir=/data/jeffcheng1234/wikipedia/wikipedia
 
 # download diffs
 mkdir -p ${data_dir}/diffs;

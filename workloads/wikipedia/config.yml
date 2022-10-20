@@ -1,5 +1,5 @@
 [directory]
-data_dir = /data/wooders/ralf-vldb/results/wikipedia
+data_dir = /data/jeffcheng1234/ralf-vldb/results/wikipedia
 revisions_dir = %(data_dir)s/recentchanges
 raw_doc_dir = %(data_dir)s/doc_xml/
 parsed_doc_dir = %(data_dir)s/doc_pkl/
@@ -7,10 +7,10 @@ parsed_tmp_dir = %(data_dir)s/parsed_tmp/
 diff_dir = %(data_dir)s/diffs/
 embedding_dir = %(data_dir)s/embeddings/
 exp_dir  = %(data_dir)s/simulation_output/
-dpr_dir = /home/eecs/wooders/DPR 
+dpr_dir = /home/eecs/jeffcheng1234/DPR 
 
 [files]
-data_dir = /data/wooders/ralf-vldb/datasets/wikipedia
+data_dir = /data/jeffcheng1234/ralf-vldb/datasets/wikipedia
 raw_questions_file = %(data_dir)s/10042021_questions_revid_filtered.csv
 model_file = %(data_dir)s/bert-base-encoder.cp
 changes_file = %(data_dir)s/changes.csv
@@ -26,8 +26,8 @@ timestamp_weights_file = %(data_dir)s/timestamp_weights_file.json
 bucket_weights_file = %(data_dir)s/bucket_weights.json
 
 [simulation]
-data_dir = /data/wooders/ralf-vldb/datasets/wikipedia
-plan_dir = /data/wooders/ralf-vldb/results/wikipedia/plans
+data_dir = /data/jeffcheng1234/ralf-vldb/datasets/wikipedia
+plan_dir = /data/jeffcheng1234/ralf-vldb/results/wikipedia/plans
 init_data_file = %(data_dir)s/init_data.json
 optimal_plan_file = %(data_dir)s/optimal_plan.json
 stream_edits_file = %(data_dir)s/edit_stream.json

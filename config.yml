@@ -1,6 +1,6 @@
 [default] 
-root_dir = /home/eecs/wooders/experiments
-data_dir = /data/wooders/ralf-vldb/
+root_dir = /home/eecs/jeffcheng1234/experiments
+data_dir = /data/jeffcheng1234/ralf-vldb/
 results_dir = %(data_dir)s/results
 plots_dir = %(data_dir)s/plots
 dataset_dir = %(data_dir)s/datasets

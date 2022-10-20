@@ -1,5 +1,5 @@
 [directory]
-data_dir = /data/wooders/wikipedia
+data_dir = /data/jeffcheng1234/wikipedia
 revisions_dir = %(data_dir)s/recentchanges
 raw_doc_dir = %(data_dir)s/doc_xml/
 parsed_doc_dir = %(data_dir)s/doc_pkl/
@@ -7,10 +7,10 @@ parsed_tmp_dir = %(data_dir)s/parsed_tmp/
 diff_dir = %(data_dir)s/diffs/
 embedding_dir = %(data_dir)s/embeddings/
 exp_dir  = %(data_dir)s/simulation_output/
-dpr_dir = /home/eecs/wooders/DPR 
+dpr_dir = /home/eecs/jeffcheng1234/DPR 
 
 [files]
-data_dir = /data/wooders/wikipedia
+data_dir = /data/jeffcheng1234/wikipedia
 raw_questions_file = %(data_dir)s/10042021_questions_revid_filtered.csv
 model_file = %(data_dir)s/bert-base-encoder.cp
 changes_file = %(data_dir)s/changes.csv
@@ -25,8 +25,8 @@ pageview_file = %(data_dir)s/pageviews.csv
 timestamp_weights_file = %(data_dir)s/timestamp_weights_file.json
 
 [simulation]
-data_dir = /data/wooders/wikipedia
-plan_dir = /data/wooders/wiki-plans
+data_dir = /data/jeffcheng1234/wikipedia
+plan_dir = /data/jeffcheng1234/wiki-plans
 init_data_file = %(data_dir)s/init_data.json
 weights_dir = %(data_dir)s/weights
 optimal_plan_file = %(data_dir)s/optimal_plan.json
