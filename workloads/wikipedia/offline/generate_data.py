@@ -313,6 +313,7 @@ def generate_diffs(
 
 # convert wikipedia dump into single pkl file per title
 def dump_to_pickle_title(top_folder, target_dir, title):
+    from bs4 import BeautifulSoup
     total = 0
     docs = []
     for folder in os.listdir(top_folder):
@@ -340,12 +341,16 @@ def extract(title, raw_doc_dir, parsed_tmp_dir, parsed_doc_dir):
 
     print(bashCommand)
 
-    process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-    output, error = process.communicate()
+    try:
+        process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
 
-    pkl_file = dump_to_pickle_title(
-        f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
-    )
+        pkl_file = dump_to_pickle_title(
+            f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
+        )
+    except Exception as e:
+        log_file = open(str(os.getpid()) + "_log_file.txt", "a")
+        log_file.write(str(e) + "\n")
 
 
 def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
@@ -359,9 +364,6 @@ def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
         for f in files
         if not os.path.isdir(f)
     ]
-    
-    workers = 1
-
     # create pool and run
     p = Pool(workers)
     p.starmap(extract, files)
@@ -621,8 +623,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_parse_docs", action="store_true", default=False
     )  # re-parse document versions
-    parser.add_argument("--run_get_questions", action="store_true", default=False)
-    parser.add_argument("--run_get_pageviews", action="store_true", default=False)
+    # parser.add_argument("--run_get_questions", action="store_true", default=False) # Don't need these for now.
+    # parser.add_argument("--run_get_pageviews", action="store_true", default=False)
     parser.add_argument(
         "--run_generate_diffs", action="store_true", default=False
     )  # re-process generating diffs
