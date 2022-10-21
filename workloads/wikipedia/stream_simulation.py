@@ -52,14 +52,20 @@ class Queue:
         self.queue = defaultdict(lambda: None)
         self.staleness = defaultdict(lambda: 0)
         self.last_key = defaultdict(lambda: 0)
-        self.past_updates = defaultdict(lambda: 0)
+        self.past_updates = defaultdict(lambda: 1)
+        self.pending = defaultdict(lambda: 0)
 
         # new baselines 
-        self.past_queries = defaultdict(lambda: 0) 
+        if policy == "query_cold":
+            self.past_queries = defaultdict(lambda: 100000000) 
+        else:
+            self.past_queries = defaultdict(lambda: 0) 
+
 
     def push(self, key, value): 
         self.queue[key] = value
         self.last_key[key] = time.time()
+        self.pending[key] += 1
         
     def arg_max(self, data_dict): 
         max_key = None
@@ -86,18 +92,21 @@ class Queue:
         elif self.policy == "last_query":
             key = self.arg_max(self.last_key)
         elif self.policy == "max_pending":
-            key = self.arg_max({key: len(self.queue[key]) for key in self.queue.keys()})
+            key = self.arg_max(self.pending)
         elif self.policy == "min_past": 
             key = self.arg_max({key: 1/(self.past_updates.setdefault(key, 0)+1) for key in self.queue.keys()})
         elif self.policy == "round_robin": 
             key = self.arg_max(self.staleness)
-        elif self.policy == "query_proportional": 
+        elif self.policy == "query_proportional" or self.policy == "query_cold": 
             key = self.arg_max(self.past_queries)
         elif self.policy == "batch":
             key = self.arg_max(self.staleness) # doensn't matter
         elif self.policy == "random": 
             options = [k for k in self.queue.keys() if self.queue[k] is not None]
-            key = (random.choice(options), 0)
+            if len(options) == 0: 
+                key = (None, None)
+            else:
+                key = (random.choice(options), 0)
         else: 
             raise ValueError("Invalid policy")
        
@@ -114,6 +123,8 @@ class Queue:
         self.staleness[key] = 0
         self.total_error[key] = 0
         self.past_queries[key] = 0
+        self.past_updates[key] += 1
+        self.pending[key] = 0
         
         return event
 
@@ -131,6 +142,9 @@ class Queue:
     def timestep(self): 
         for key in self.queue.keys(): 
             self.staleness[key] += 1
+            #self.total_error[key] += 1
+
+
 
 
 class Simulator: 
@@ -165,6 +179,15 @@ class Simulator:
             self.process_update(doc_id, diff["file"], init=True)
             self.embedding_version[doc_id] = diff["revid"]
 
+        # filter out invalid revisions
+        self.valid_revisions = set() 
+        for q in self.questions: 
+            for ql in q.values(): 
+                for qll in ql: 
+                    self.valid_revisions.add(str(qll["revid"]))
+
+        print("Keys", len(self.embedding_version.keys()))
+
         # create update queue
         self.queue = Queue(policy)
         self.policy = policy 
@@ -172,33 +195,53 @@ class Simulator:
         self.updates = updates
         self.policy = policy 
 
+        self.cache = {}
+
+
  
     def embedding_path(self, revid, version="_new"):
         return os.path.join(self.embedding_dir, f"{revid}{version}.pkl")
 
+    def cache_key(self, question, answer, doc_id, revid): 
+        return str(question) + str(answer) + str(doc_id) + str(revid)
+
     def predict_single(self, doc_id, questions, ts): 
 
+        revid = self.embedding_version[doc_id]
+
         queries = []
+        input_questions = []
         for q in questions: 
             question = q["question"]
             answer = q["answer"]
-            queries.append([question, [answer], doc_id])
-        
-        doc_questions_file = f"{self.tmp_dir}/qa_{int(ts)}_{doc_id}.tsv"
-        doc_questions_df = pd.DataFrame(queries)
-        doc_questions_df.to_csv(
-            doc_questions_file, sep="\t", index=False, header=False
-        )
 
-        revid = self.embedding_version[doc_id]
-        #print("Using version", revid, "init", self.init_data[doc_id]["revid"])
-        pred = self.stream_model.predict_single_doc(doc_questions_file, revid, doc_id)
-        for q, p in zip(questions, pred): 
-            p["doc_id"] = q["doc_id"]
-            p["revid"] = q["revid"]
-            p["actual_revid"] = revid
-            p["ts"] = ts
-        return pred
+            if self.cache_key(question, answer, doc_id, revid) not in self.cache: 
+                queries.append([question, [answer], doc_id])
+                input_questions.append(q)
+       
+        if len(input_questions) > 0:
+            doc_questions_file = f"{self.tmp_dir}/qa_{self.policy}_{self.updates}_{int(ts)}_{doc_id}"
+            doc_questions_df = pd.DataFrame(queries)
+            doc_questions_df.to_csv(
+                doc_questions_file, sep="\t", index=False, header=False
+            )
+
+            print("Using version", revid, "init", self.init_data[doc_id]["revid"])
+            pred = self.stream_model.predict_single_doc(doc_questions_file, revid, doc_id)
+
+            for q, p in zip(input_questions, pred): 
+                p["doc_id"] = q["doc_id"] 
+                p["revid"] = q["revid"]
+                p["actual_revid"] = revid
+                p["ts"] = ts
+
+                self.cache[self.cache_key(q["question"], q["answer"], q["doc_id"], revid)] = p
+
+        # collect and return predictions
+        predictions = []
+        for q in questions: 
+            predictions.append(self.cache[self.cache_key(q["question"], q["answer"], q["doc_id"], revid)])
+        return predictions
 
 
     def process_update(self, doc_id, filename, init=False): 
@@ -265,8 +308,41 @@ class Simulator:
             # update budget
             budget += self.updates
 
+            # process events
+            print(ts, "Updates", len(list(self.edits[ts].items())), "budget", budget, "queue", self.queue.size())
+            for key, revs in self.edits[ts].items(): 
+                if key not in self.embedding_version: continue # skip 
+                for rev in revs: 
+                    revid = rev.replace(".json", "").split("_")[0]
+                    #if revid not in self.valid_revisions: 
+                    #    print("skipping", revid) 
+                    #    continue
+                    self.queue.push(key, {"doc_id": key, "filename": rev, "ts": ts})
+
+            # process updates
+            if (self.policy == "batch" and budget >= self.queue.size()) or self.policy != "batch": 
+                while budget >= 1: 
+                    event = self.queue.pop(ts)
+                    if event: 
+                        print(f'{ts}: update to {event["filename"]}')
+                        self.process_update(event["doc_id"], event["filename"])
+                        event["update_time"] = ts
+                        updates.append(event)
+                        budget -= 1
+                    else: 
+                        break
+                if budget >= 1:
+                    budget = 0
+
             # process questions
             for doc_id, doc_questions in self.questions[ts].items(): 
+                if doc_id not in self.embedding_version: continue # skip
+
+                # filter out questions for future revisions
+                #doc_questions = [q for q in doc_questions if str(q["revid"]) == self.curr_rev[doc_id]]
+                if len(doc_questions) == 0: continue
+
+               
                 pred = self.predict_single(doc_id, doc_questions, ts)
                 for p in pred: 
 
@@ -274,27 +350,11 @@ class Simulator:
                     # append results
                 plan_results += pred
 
-            # process questions:
-            print("Updates", len(list(self.edits[ts].items())), "budget", budget)
-            for key, revs in self.edits[ts].items(): 
-                for rev in revs: 
-                    self.queue.push(key, {"doc_id": key, "filename": rev, "ts": ts})
-
-            # process updates
-            if (self.policy == "batch" and budget >= self.queue.size()) or self.policy != "batch": 
-                while budget > 1: 
-                    event = self.queue.pop(ts)
-                    if not event: break
-                    self.process_update(event["doc_id"], event["filename"])
-                    event["update_time"] = ts
-                    updates.append(event)
-                    budget -= 1
-
             # increment queue timestep
             self.queue.timestep()
 
 
-            if len(plan_results) > 0 and len(plan_results) % 100 == 0:
+            if (len(plan_results) > 0 and len(plan_results) % 100 == 0) or ts == len(self.questions) - 1:
 
                 pd.DataFrame(plan_results).to_csv(f"{results_dir}/results_{self.policy}_{self.updates}.csv")
                 pd.DataFrame(updates).to_csv(f"{results_dir}/updates_{self.policy}_{self.updates}.csv")

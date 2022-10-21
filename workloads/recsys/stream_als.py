@@ -206,15 +206,18 @@ class UserEventQueue:
         self.queue[key] = []
 
         # update metrics 
-        for k in self.queue.keys():
-            self.staleness[k] += 1
         self.staleness[key] = 0
         self.total_error[key] = 0
+        self.past_queries[key] =  0 
         
         # TODO: this is wrong
         self.past_updates[key] = self.past_updates.setdefault(key, 0) + len(events)
             
         return key 
+
+    def timestep(self): 
+        for key in self.staleness.keys(): 
+            self.staleness[key] += 1
 
     def size(self): 
         size = 0
@@ -369,7 +372,8 @@ def main(argv):
 
     limit = None
     
-    policies = ["random"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    #policies = ["round_robin", "query_proportional"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = ["batch"]
     #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
     updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8]

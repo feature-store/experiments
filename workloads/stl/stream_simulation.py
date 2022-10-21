@@ -1,4 +1,5 @@
 import json 
+import random
 import time
 from collections import defaultdict
 import os
@@ -53,7 +54,11 @@ def simulate(data, start_ts, runtime, policy):
     update_times = defaultdict(list)
    
     # start with initial set of models
-    last_model = {key: get_model(data, key, start_ts) for key in range(1, FLAGS.num_keys+1, 1)} 
+    last_model = {}
+    for key in range(1, FLAGS.num_keys+1, 1):
+        st = time.time()
+        last_model[key] = get_model(data, key, start_ts)
+        print("TIME", time.time() - st)
     next_update_time = start_ts #+ runtime # time when model is completed
     last_update_time = start_ts
 
@@ -76,7 +81,7 @@ def simulate(data, start_ts, runtime, policy):
                     sp=1
                 )
                 score[key-1] = e * t # use total, not mean 
-            elif policy == "round_robin": 
+            elif policy == "round_robin" or policy == "random": 
                 score[key-1] += 1
             elif policy == "max_staleness": 
                 score[key-1] = ts-last_time
@@ -98,14 +103,18 @@ def simulate(data, start_ts, runtime, policy):
 
             # can update model
             while ts >= next_update_time: 
-                # pick max error key 
-                key = np.array(score).argmax() + 1
-                #print(key, score)
-
                 if max(score) == 0: # nothing to update
                     print("nothing to update", ts)
                     break
-                
+
+                # pick max error key 
+                if policy == "random": 
+                    options = [k+1 for k in range(len(score)) if score[k] > 0]
+                    key = random.choice(options)
+                else: 
+                    key = np.array(score).argmax() + 1
+
+               
                 # mark as update time for key 
                 update_times[key].append(ts) 
                 last_model[key] = get_model(data, key, ts)
@@ -188,9 +197,10 @@ def read_data(dataset_dir):
 def main(argv):
     #runtime = [24, 12, 4, 2, 1, 0]
     #runtime = [4, 6, 8, 12, 24] #[1, 2, 3]
-    policy = ["round_robin", "total_error", "batch"]
+    policy = ["random"] #, "round_robin", "total_error", "batch"]
     #runtime = [0, 1000000]
-    runtime = [0.05, 0.02] #0.5, 0.2, 0.1]
+    #runtime = [0.05, 0.02, 0.5, 0.2, 0.1]
+    runtime = [0.5, 0.2, 0.1, 1, 2, 3, 4, 6, 8, 12, 24]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
