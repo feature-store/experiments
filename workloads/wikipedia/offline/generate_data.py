@@ -15,13 +15,13 @@ import numpy as np
 
 from multiprocessing import Pool
 
-import wandb
+# import wandb
 
 # from concurrent.futures import ProcessPoolExecutor
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
-from generate_diffs import generate_sentence_level_diffs
-from embedding import generate_embeddings
+from preprocessing.generate_diffs import generate_sentence_level_diffs
+from preprocessing.embedding import generate_embeddings
 
 from log_data import log_files, log_pageview, log_simulation, log_questions
 
@@ -56,10 +56,12 @@ def get_recent_changes(revisions_dir, changes_file):
         # if i % 100 == 0:
         #    print(f"Read {i}/{len(files)}, changes so far: {len(changes)}")
 
+    print(len(files))
     # create dataframe
     changes_df = pd.DataFrame(changes)
 
     # create time index
+    print(changes_df.head(10))
     changes_df["datetime"] = pd.to_datetime(changes_df["timestamp"])
     changes_df = changes_df.set_index("datetime").sort_index()
 
@@ -74,7 +76,8 @@ def get_titles(changes_file, titles_file, n=200):
     title_ids = set(changes_df[["title", "pageid"]].apply(tuple, axis=1).tolist())
 
     counts = changes_df.title.value_counts().to_frame()
-    top_titles = counts[counts["title"] > n]
+    top_titles = counts.nlargest(10000, "title")
+    print(top_titles)
     top_titles.columns = ["count"]
     top_titles["title"] = top_titles.index
     top_titles.to_csv(titles_file)
@@ -310,6 +313,7 @@ def generate_diffs(
 
 # convert wikipedia dump into single pkl file per title
 def dump_to_pickle_title(top_folder, target_dir, title):
+    from bs4 import BeautifulSoup
     total = 0
     docs = []
     for folder in os.listdir(top_folder):
@@ -335,12 +339,18 @@ def extract(title, raw_doc_dir, parsed_tmp_dir, parsed_doc_dir):
     f = f"{raw_doc_dir}/{title}"
     bashCommand = f"wikiextractor {f} -o {parsed_tmp_dir}/tmp_parsed{title}"
 
-    process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-    output, error = process.communicate()
+    print(bashCommand)
 
-    pkl_file = dump_to_pickle_title(
-        f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
-    )
+    try:
+        process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+        pkl_file = dump_to_pickle_title(
+            f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
+        )
+    except Exception as e:
+        log_file = open(str(os.getpid()) + "_log_file.txt", "a")
+        log_file.write(str(e) + "\n")
 
 
 def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
@@ -354,7 +364,6 @@ def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
         for f in files
         if not os.path.isdir(f)
     ]
-
     # create pool and run
     p = Pool(workers)
     p.starmap(extract, files)
@@ -488,10 +497,9 @@ def search_answer(rev_file, embedding_dir, question):
             found_answer = True
     return found_answer
 
-
-def generate_key_weights(pageview_file, titles_file):
-    pass
-
+def query_recentchanges_api(start_time, end_time, revisions_dir):
+    from wiki_api.query_recentchanges_api import query_recent_changes
+    query_recent_changes(start_time, end_time, revisions_dir)
 
 def check_dataset(
     titles_file,
@@ -595,7 +603,7 @@ def check_dataset(
 
 if __name__ == "__main__":
 
-    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
+    # run = wandb.init(job_type="dataset-creation", project="wiki-workload")
 
     # configuration file
     config = configparser.ConfigParser()
@@ -615,8 +623,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_parse_docs", action="store_true", default=False
     )  # re-parse document versions
-    parser.add_argument("--run_get_questions", action="store_true", default=False)
-    parser.add_argument("--run_get_pageviews", action="store_true", default=False)
+    # parser.add_argument("--run_get_questions", action="store_true", default=False) # Don't need these for now.
+    # parser.add_argument("--run_get_pageviews", action="store_true", default=False)
     parser.add_argument(
         "--run_generate_diffs", action="store_true", default=False
     )  # re-process generating diffs
@@ -653,8 +661,12 @@ if __name__ == "__main__":
     stream_edits_file = config["simulation"]["stream_edits_file"]
     stream_questions_file = config["simulation"]["stream_questions_file"]
 
+    # wiki api calls config
+    start_time = config["wiki_api_config"]["start_time"]
+    end_time = config["wiki_api_config"]["end_time"]
+
     if args.run_query_recentchanges:
-        query_edit_stream(start_time, end_time, revisions_dir)
+        query_recentchanges_api(start_time, end_time, revisions_dir)
 
     if args.run_query_doc_versions:
         query_doc_versions(titles_file, start_time, end_time, raw_doc_dir)
@@ -668,7 +680,7 @@ if __name__ == "__main__":
         print("Generated titles file", titles_file)
         edits_df = get_edits(edits_file, changes_file, titles_file)
         print("Generated edits file", edits_file)
-        log_files(run, config)
+        # log_files(run, config)
 
     # query document versions for list of titles
     if args.run_query_doc_versions:
@@ -684,16 +696,16 @@ if __name__ == "__main__":
             os.mkdir(parsed_tmp_dir)
         parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32)
 
-    # get questions
+    # get question -- requires kevin's question CSVs
     if args.run_get_questions:
         questions_df = get_questions(raw_questions_file, questions_file)
         print("Generated questions file", raw_questions_file, questions_file)
-        log_questions(run, config)
+        # log_questions(run, config)
 
     # generate pageviews / compute page weights
-    if args.run_get_pageviews:
-        get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
-        log_pageview(run, config)
+    # if args.run_get_pageviews:
+    #    get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
+    #    log_pageview(run, config)
 
     # generate diffs between document versions
     if args.run_generate_diffs:
@@ -713,7 +725,7 @@ if __name__ == "__main__":
             stream_edits_file,
             stream_questions_file,
         )
-        log_simulation(run, config)
+        # log_simulation(run, config)
 
     # run tests to validate simulation data
     if args.run_check_dataset:
@@ -727,5 +739,5 @@ if __name__ == "__main__":
         )
 
     # generate embeddings for revids from diffs (make passages)
-    if args.run_generate_embeddings:
-        generate_embeddings(model_file, diff_dir, embedding_dir)
+    # if args.run_generate_embeddings:
+    #    generate_embeddings(model_file, diff_dir, embedding_dir)
