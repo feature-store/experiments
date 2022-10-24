@@ -152,8 +152,8 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
 
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
-    from generate_diffs import generate_sentence_level_diffs
-    from embedding import generate_embeddings
+    from preprocessing.generate_diffs import generate_sentence_level_diffs
+    from preprocessing.embedding import generate_embeddings
 
 
     # load data for file
@@ -193,11 +193,19 @@ def create_diff_json(doc_pkl, rev_pairs, diff_dir):
 
 
 def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
-    from generate_diffs import generate_sentence_level_diffs
-    from embedding import generate_embeddings
+    from preprocessing.generate_diffs import generate_sentence_level_diffs
+    from preprocessing.embedding import generate_embeddings
 
 
-    data = pickle.loads(open(filename, "rb").read())
+    data = []
+    ids = set([])
+
+    # de-deuplicate
+    for d in pickle.loads(open(filename, "rb").read()): 
+        if d["id"] in ids: 
+            continue 
+        ids.add(d["id"])
+        data.append(d)
 
     for i in range(len(data)):
         for j in range(len(data)):
@@ -242,6 +250,7 @@ def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
                 }
             # TODO: write to tmp file first (make sure we dont have messed up files)
             open(diff_file, "w").write(json.dumps(diff, indent=2))
+            print("finished", rev_pair, diff_file)
             return
 
 
@@ -253,7 +262,7 @@ def generate_diffs(
     titles_df = pd.read_csv(titles_file)
     titles = list(set(titles_df.title.tolist()))
 
-    # print(titles)
+    print(titles)
 
     # filter out revision pairs not in edits_file
     edits_df = pd.read_csv(edits_file)
@@ -269,9 +278,9 @@ def generate_diffs(
     open(revision_file, "w").write(json.dumps(title_to_rev_pairs))
 
     num_keys = len(title_to_rev_pairs.keys())
-    # print(
-    #    f"Proceessing revisions for {num_keys} titles, writing to {diff_dir}"
-    # )
+    print(
+       f"Proceessing revisions for {num_keys} titles, writing to {diff_dir}"
+    )
 
     inputs = []
     for title in tqdm(titles):
@@ -290,8 +299,8 @@ def generate_diffs(
     print("processing revids", len(inputs), diff_dir)
     chunk_size = 100000
     for i in range(0, len(inputs), chunk_size):
-        p = Pool(128)
-        print("created pool", i, i + chunk_size, len(inputs))
+        p = Pool(workers)
+        print("creating pool", i, i + chunk_size, len(inputs))
         p.starmap(generate_diffs_helper, inputs[i : i + chunk_size])
         p.close()
 
