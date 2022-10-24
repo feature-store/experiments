@@ -30,6 +30,7 @@ from dpr.utils.data_utils import Tensorizer
 
 
 class Retriever:
+
     def __init__(self, model_file):
 
         parser = argparse.ArgumentParser(description="")

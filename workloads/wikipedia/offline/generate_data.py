@@ -153,7 +153,6 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
     from preprocessing.generate_diffs import generate_sentence_level_diffs
-    from preprocessing.embedding import generate_embeddings
 
 
     # load data for file
@@ -743,5 +742,7 @@ if __name__ == "__main__":
         )
 
     # generate embeddings for revids from diffs (make passages)
-    if args.run_generate_embeddings:
-        generate_embeddings(model_file, diff_dir, embedding_dir)
+    #if args.run_generate_embeddings: # flags breaks...
+    # TODO: copy s3://feature-store-datasets/wikipedia/bert-base-encoder.cp
+    from preprocessing.embedding import generate_embeddings
+    generate_embeddings(model_file, diff_dir, embedding_dir)
