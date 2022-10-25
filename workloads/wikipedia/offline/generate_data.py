@@ -15,14 +15,10 @@ import numpy as np
 
 from multiprocessing import Pool
 
-import wandb
 
 # from concurrent.futures import ProcessPoolExecutor
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
-from generate_diffs import generate_sentence_level_diffs
-from embedding import generate_embeddings
-
 from log_data import log_files, log_pageview, log_simulation, log_questions
 
 
@@ -82,6 +78,7 @@ def get_titles(changes_file, titles_file, n=200):
 
 
 def get_edits(edits_file, changes_file, titles_file):
+    print("update edits")
     changes_df = pd.read_csv(changes_file)
     titles_df = get_titles(changes_file, titles_file)
     titles = list(set(titles_df.index.tolist()))
@@ -155,6 +152,9 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
 
 # create diff JSON file from valid list of revision pairs, doc pkl
 def create_diff_json(doc_pkl, rev_pairs, diff_dir):
+    from preprocessing.generate_diffs import generate_sentence_level_diffs
+    from preprocessing.embedding import generate_embeddings
+
 
     # load data for file
     data = pickle.loads(open(doc_pkl, "rb").read())
@@ -193,8 +193,19 @@ def create_diff_json(doc_pkl, rev_pairs, diff_dir):
 
 
 def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
+    from preprocessing.generate_diffs import generate_sentence_level_diffs
+    from preprocessing.embedding import generate_embeddings
 
-    data = pickle.loads(open(filename, "rb").read())
+
+    data = []
+    ids = set([])
+
+    # de-deuplicate
+    for d in pickle.loads(open(filename, "rb").read()): 
+        if d["id"] in ids: 
+            continue 
+        ids.add(d["id"])
+        data.append(d)
 
     for i in range(len(data)):
         for j in range(len(data)):
@@ -239,6 +250,7 @@ def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
                 }
             # TODO: write to tmp file first (make sure we dont have messed up files)
             open(diff_file, "w").write(json.dumps(diff, indent=2))
+            print("finished", rev_pair, diff_file)
             return
 
 
@@ -250,7 +262,7 @@ def generate_diffs(
     titles_df = pd.read_csv(titles_file)
     titles = list(set(titles_df.title.tolist()))
 
-    # print(titles)
+    print(titles)
 
     # filter out revision pairs not in edits_file
     edits_df = pd.read_csv(edits_file)
@@ -266,9 +278,9 @@ def generate_diffs(
     open(revision_file, "w").write(json.dumps(title_to_rev_pairs))
 
     num_keys = len(title_to_rev_pairs.keys())
-    # print(
-    #    f"Proceessing revisions for {num_keys} titles, writing to {diff_dir}"
-    # )
+    print(
+       f"Proceessing revisions for {num_keys} titles, writing to {diff_dir}"
+    )
 
     inputs = []
     for title in tqdm(titles):
@@ -287,8 +299,8 @@ def generate_diffs(
     print("processing revids", len(inputs), diff_dir)
     chunk_size = 100000
     for i in range(0, len(inputs), chunk_size):
-        p = Pool(128)
-        print("created pool", i, i + chunk_size, len(inputs))
+        p = Pool(workers)
+        print("creating pool", i, i + chunk_size, len(inputs))
         p.starmap(generate_diffs_helper, inputs[i : i + chunk_size])
         p.close()
 
@@ -364,9 +376,11 @@ def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
 # assign timesteps
 def assign_timestamps_min(ts):
     # take in unix timestamp - covert to integer
-    start_ts = 1628131044000000000  # don't change
+    #start_ts = 1628121600000000000# don't change
+    start_ts = 1628131044000000000 
     delta = ts - start_ts
     if delta < 0:
+        print(delta)
         return None
 
     return int(delta / (60 * 1000000000))
@@ -380,6 +394,7 @@ def generate_simulation_data(
     stream_edits_file,
     stream_questions_file,
 ):
+    print(questions_file)
     edits_df = pd.read_csv(edits_file)
     questions_df = pd.read_csv(questions_file)
 
@@ -464,7 +479,9 @@ def generate_simulation_data(
                     for f in files:
                         unique_files.add(f)
             print(f"Num edits ts {ts}/{max_ts+1}: {len(unique_files)}")
+            print(len(init_data.keys()))
 
+    print("writing", stream_questions_file)
     open(stream_edits_file, "w").write(json.dumps(edits))
     open(stream_questions_file, "w").write(json.dumps(questions))
     open(init_data_file, "w").write(json.dumps(init_data))
@@ -595,7 +612,6 @@ def check_dataset(
 
 if __name__ == "__main__":
 
-    run = wandb.init(job_type="dataset-creation", project="wiki-workload")
 
     # configuration file
     config = configparser.ConfigParser()
@@ -667,8 +683,8 @@ if __name__ == "__main__":
         titles_df = get_titles(changes_file, titles_file)
         print("Generated titles file", titles_file)
         edits_df = get_edits(edits_file, changes_file, titles_file)
-        print("Generated edits file", edits_file)
-        log_files(run, config)
+        #print("Generated edits file", edits_file)
+        #log_files(run, config)
 
     # query document versions for list of titles
     if args.run_query_doc_versions:
@@ -688,7 +704,7 @@ if __name__ == "__main__":
     if args.run_get_questions:
         questions_df = get_questions(raw_questions_file, questions_file)
         print("Generated questions file", raw_questions_file, questions_file)
-        log_questions(run, config)
+        #log_questions(run, config)
 
     # generate pageviews / compute page weights
     if args.run_get_pageviews:
@@ -713,7 +729,7 @@ if __name__ == "__main__":
             stream_edits_file,
             stream_questions_file,
         )
-        log_simulation(run, config)
+        #log_simulation(run, config)
 
     # run tests to validate simulation data
     if args.run_check_dataset:
