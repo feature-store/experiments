@@ -20,8 +20,8 @@ from multiprocessing import Pool
 # from concurrent.futures import ProcessPoolExecutor
 
 # from generate diffs file (originally from DPR repo... sorry kevin)
-from preprocessing.generate_diffs import generate_sentence_level_diffs
-from preprocessing.embedding import generate_embeddings
+# from preprocessing.generate_diffs import generate_sentence_level_diffs
+# from preprocessing.embedding import generate_embeddings
 
 from log_data import log_files, log_pageview, log_simulation, log_questions
 
@@ -32,10 +32,8 @@ def query_recentchanges(start_time, end_time, revision_file):
 
 
 def query_doc_versions(titles_file, start_time, end_time, raw_doc_dir):
-    # TODO: query doc versions
-    titles_df = pd.read_csv(titles_file)
-    titles = list(set(top_titles.index.tolist()))
-    pass
+    from wiki_api.query_docxml_api import query_doc_revisions
+    query_doc_revisions(raw_doc_dir, titles_file, start_time, end_time)
 
 
 def get_recent_changes(revisions_dir, changes_file):
