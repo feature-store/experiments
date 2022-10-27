@@ -1,4 +1,5 @@
 import pandas as pd
+import random
 import time
 import concurrent.futures
 from scipy.sparse import coo_matrix
@@ -65,7 +66,7 @@ flags.DEFINE_boolean(
 
 
 # ratings is an n by m sparse matrix
-def update_user(user_id, user_data, movie_features, d=50):
+def update_user(user_id, user_data, movie_features, d=50, runtime_file=None):
    # user_data = ratings.getrow(uid)
     st = time.time()
     user_data = user_data.tocoo() # lookup all rating data for this user
@@ -84,6 +85,11 @@ def update_user(user_id, user_data, movie_features, d=50):
     #model = Ridge(alpha=alpha) #Maybe use RidgeCV() instead so we don't tune lambda
     model = Ridge(alpha=0.001, fit_intercept=True)
     model.fit(X, Y)
+
+    runtime = time.time() - st
+
+    if runtime_file is not None: 
+        open(runtime_file, "a").write(str(runtime) + "\n")
 
     #print(time.time() - st)
     
@@ -123,6 +129,9 @@ class UserEventQueue:
         self.queue = defaultdict(list)
         self.staleness = defaultdict(lambda: 0)
         self.last_key = defaultdict(lambda: 0)
+
+        # new baselines 
+        self.past_queries = defaultdict(lambda: 0) 
         
     def push(self, uid, mid, rating, user_features, movie_features): 
         
@@ -139,6 +148,7 @@ class UserEventQueue:
 
         # TODO: try moving existing keys to front? 
         self.last_key[uid] = time.time()
+        self.past_queries[uid] += 1
         
     def arg_max(self, data_dict): 
         max_key = None
@@ -170,6 +180,16 @@ class UserEventQueue:
             key = self.arg_max({key: 1/(self.past_updates.setdefault(key, 0)+1) for key in self.queue.keys()})
         elif self.policy == "round_robin": 
             key = self.arg_max(self.staleness)
+        elif self.policy == "query_proportional": 
+            key = self.arg_max(self.past_queries)
+        elif self.policy == "batch":
+            key = self.arg_max(self.staleness) # doensn't matter
+        elif self.policy == "random": 
+            options = [k for k in self.queue.keys() if len(self.queue[k]) > 0]
+            if len(options) == 0: 
+                key = (None, None)
+            else: 
+                key = (random.choice(options), 0)
         else: 
             raise ValueError("Invalid policy")
        
@@ -186,17 +206,33 @@ class UserEventQueue:
         self.queue[key] = []
 
         # update metrics 
-        for k in self.queue.keys():
-            self.staleness[k] += 1
         self.staleness[key] = 0
         self.total_error[key] = 0
+        self.past_queries[key] =  0 
         
         # TODO: this is wrong
         self.past_updates[key] = self.past_updates.setdefault(key, 0) + len(events)
             
         return key 
 
+    def timestep(self): 
+        for key in self.staleness.keys(): 
+            self.staleness[key] += 1
+
+    def size(self): 
+        size = 0
+        for key in self.queue.keys(): 
+            if len(self.queue[key]) > 0:
+                size += 1
+        return size
+
 def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".", limit=None, d=50, split=0.5): 
+
+
+    # create/clear runtime file
+    runtime_file = f"{result_dir}/runtimes.txt"
+    open(runtime_file, "w").close()
+    print(runtime_file)
 
     # read data 
     test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
@@ -207,10 +243,12 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     for ts, group in tqdm(test_df.groupby("timestamp")):
         data[ts] = group.to_dict("records")
     ratings = pickle.load(open(f"{result_dir}/ratings_{split}.pkl", "rb"))
-
+#
     # updated features
     user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
     movie_features = pickle.load(open(f"{result_dir}/train_movie_features_{split}.pkl", "rb"))
+
+
 
     # original features
     train_user_features = pickle.load(open(f"{result_dir}/train_user_features_{split}.pkl", "rb"))
@@ -236,6 +274,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     queue = UserEventQueue(user_features.shape[0], policy, past_updates) 
     #for ts in tqdm(list(data.keys())[:limit]): 
     next_ts = 0
+    update_budget = 0
     for ts in list(data.keys())[:limit]: 
 
         # process events
@@ -255,14 +294,28 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
             users.append(uid)
             movies.append(mid)
 
-        if updates_per_ts is not None and updates_per_ts >= 1:
+
+        if policy == "batch":
+            update_budget += updates_per_ts
+            if queue.size() <= update_budget:
+
+                # update all uids in queue 
+                while True: 
+                    uid = queue.pop()
+                    if uid is None: 
+                        break
+                    user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
+                    update_times[uid].append(ts)
+                update_budget = 0 
+
+        elif updates_per_ts is not None and updates_per_ts >= 1:
             
             for i in range(updates_per_ts): 
                 uid = queue.pop()
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
-                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
                 update_times[uid].append(ts)
                 
                 # TODO: make sure overall loss is decreasing (training error)
@@ -272,7 +325,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
                 if uid is None: 
                     #print(f"{ts}: No updates in queue")
                     break 
-                user_features[uid] = update_user(uid, ratings, movie_features, d)
+                user_features[uid] = update_user(uid, ratings, movie_features, d, runtime_file)
                 update_times[uid].append(ts)
                 next_ts = ts + 1/updates_per_ts
                 #print(ts, next_ts, len(data[ts]))
@@ -303,7 +356,6 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     results_df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "user_id": users, "movie_id": movies, "timestamp": timestamps})
     
 
-    print("saving", f"{result_dir}/{policy}_{updates_per_ts}_split_{split}_results.csv")
     update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
     results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
 
@@ -320,11 +372,15 @@ def main(argv):
 
     limit = None
     
-    policies = ["total_error", "total_error_cold", "max_pending", "min_past", "round_robin"]
-    updates_per_ts = [0.2, 0.5, 1, 2] #[100000] #[0.5, 0.2, None]
-    #updates_per_ts = [1, 2, 4]
+    #policies = ["round_robin", "query_proportional"] #["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin"]
+    policies = ["batch"]
+    #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
+    #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
+    updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8]
     #updates_per_ts = [3]
-    ts_factors = [60, 60*60, 60*60*24]
+    #ts_factors = [60, 60*60, 60*60*24]
+    #ts_factors = [10, 100]
+    ts_factors = [60] #, 60*60, 60*60*24]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []

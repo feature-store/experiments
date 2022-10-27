@@ -4,17 +4,17 @@ import boto3
 import configparser
 import pandas as pd
 from typing import List
-from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
 # TODO: Common source operator to ingest events.csv
 
 
 def read_config(): 
     config = configparser.ConfigParser()
     # TODO: change
-    config.read("config.yml")
+    config.read("/home/eecs/wooders/experiments/config.yml")
     return { 
         "results_dir": config["default"]["results_dir"], 
         "dataset_dir": config["default"]["dataset_dir"], 
+        "plots_dir": config["default"]["plots_dir"], 
         "aws_dir": config["default"]["aws_dir"],
         "credentials": config["default"]["credentials"]
     }
@@ -114,6 +114,21 @@ def use_results(name, download = False):
 
     return os.path.join(config["results_dir"], name)
 
+def use_plots(name, download = False):
+    config = read_config()
+    print(config)
+    
+    path = os.path.join(config["plots_dir"], name)
+    if download:
+        # download form s3
+        print("Downloading from aws:", config["aws_dir"])
+        return download_dir(name, config["aws_dir"] + "/plots", config["plots_dir"])
+    elif os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
+
+    return os.path.join(config["plots_dir"], name)
+
+
 def log_dataset(name):
     """
     Upload dataset folder to s3 bucket 
@@ -133,33 +148,46 @@ def log_results(name):
     config = read_config()
     return upload_dir(name, config["results_dir"], config["aws_dir"] + "/results")
 
-
-class WriteFeatures(BaseTransform): 
+def log_plots(name):
     """
-    ralf transform to log all the feature versions (updates) being updated to a CSV file. 
-    The written CSV file can be joined with the queries CSV to determine what the feature "version" would have
-    been when each query is made. 
+    Upload plots folder to s3 bucket 
 
-    :filename: file to write features to 
-    :columns: list of column names for feature CSV
+    :name: folder name (corresponds to experiment name) - should already exists in results_dir 
     """
 
-    def __init__(self, filename: str, columns: List[str]):
-        df = pd.DataFrame({col: [] for col in columns})
-        self.cols = columns
-        self.filename = filename 
-        df.to_csv(self.filename, index=None)
-        #self.file = None
+    config = read_config()
+    return upload_dir(name, config["plots_dir"], config["aws_dir"] + "/plots")
 
-    #@property
-    #def _file(self):
-        #if self.file is None:
-            #self.file = open(self.filename, "a")
-        #return self.file
 
-    def on_event(self, record: Record): 
-        df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
-        df.to_csv(self.filename, mode="a", index=False, header=False)
+
+#class WriteFeatures(BaseTransform): 
+#
+#    from ralf.v2 import LIFO, FIFO, BaseTransform, RalfApplication, RalfConfig, Record
+#    """
+#    ralf transform to log all the feature versions (updates) being updated to a CSV file. 
+#    The written CSV file can be joined with the queries CSV to determine what the feature "version" would have
+#    been when each query is made. 
+#
+#    :filename: file to write features to 
+#    :columns: list of column names for feature CSV
+#    """
+#
+#    def __init__(self, filename: str, columns: List[str]):
+#        df = pd.DataFrame({col: [] for col in columns})
+#        self.cols = columns
+#        self.filename = filename 
+#        df.to_csv(self.filename, index=None)
+#        #self.file = None
+#
+#    #@property
+#    #def _file(self):
+#        #if self.file is None:
+#            #self.file = open(self.filename, "a")
+#        #return self.file
+#
+#    def on_event(self, record: Record): 
+#        df = pd.DataFrame({col: [getattr(record.entry, col)] for col in self.cols})
+#        df.to_csv(self.filename, mode="a", index=False, header=False)
       
 
 

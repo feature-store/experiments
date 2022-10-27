@@ -1,7 +1,10 @@
 [default] 
-root_dir = /home/ubuntu/experiments
-results_dir = %(root_dir)s/results
-dataset_dir = %(root_dir)s/datasets
+root_dir = /home/eecs/wooders/experiments
+data_dir = /data/wooders/ralf-vldb/
+results_dir = %(data_dir)s/results
+plots_dir = %(data_dir)s/plots
+dataset_dir = %(data_dir)s/datasets
+plots_dir = %(data_dir)s/plots
 credentials = %(root_dir)s/ralf-vldb.json
 aws_dir = vldb
 aws_bucket = feature-store-datasets
