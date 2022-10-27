@@ -211,14 +211,17 @@ def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
             orig_doc = data[i]
             new_doc = data[j]
 
+
             if new_doc["id"] + "_" + orig_doc["id"] != rev_pair:
+                if "United" in new_doc["title"]:
+                    print(new_doc["title"], orig_doc["title"], new_doc["id"] + "_" + orig_doc["id"], rev_pair)
                 continue
 
             # parse diffs
             diff_file = os.path.join(diff_dir, rev_pair + ".json")
 
-            if os.path.exists(diff_file):
-                continue
+            #if os.path.exists(diff_file):
+            #    continue
 
             edits = {orig_doc["title"]: new_doc}
             st = time.time()
@@ -239,6 +242,7 @@ def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
                     "new_id": new_doc["id"],
                     "diffs": all_diffs,
                 }
+                print("has diff", rev_pair, len(all_diffs[0]))
             else:
                 diff = {
                     "title": orig_doc["title"],
@@ -249,7 +253,7 @@ def generate_diffs_helper(filename, diff_dir, rev_pair, timestamp):
                 }
             # TODO: write to tmp file first (make sure we dont have messed up files)
             open(diff_file, "w").write(json.dumps(diff, indent=2))
-            print("finished", rev_pair, diff_file)
+            print(diff_file)
             return
 
 
@@ -289,14 +293,14 @@ def generate_diffs(
             continue
 
         for rev_pair in title_to_rev_pairs[title].keys():
-            if os.path.exists(os.path.join(diff_dir, rev_pair + ".json")):
-                continue
+            #if os.path.exists(os.path.join(diff_dir, rev_pair + ".json")):
+            #    continue
             inputs.append(
                 (filename, diff_dir, rev_pair, title_to_rev_pairs[title][rev_pair])
             )
 
     print("processing revids", len(inputs), diff_dir)
-    chunk_size = 100000
+    chunk_size = 1000
     for i in range(0, len(inputs), chunk_size):
         p = Pool(workers)
         print("creating pool", i, i + chunk_size, len(inputs))
@@ -343,7 +347,16 @@ def dump_to_pickle_title(top_folder, target_dir, title):
 
 # call wikiextractor library on XML
 def extract(title, raw_doc_dir, parsed_tmp_dir, parsed_doc_dir):
+    title = title.replace(" ", "-").replace("/", "-")
     f = f"{raw_doc_dir}/{title}"
+
+    if not os.path.exists(f): 
+        print("missing", f)
+        return None
+
+    if os.path.exists("{parsed_tmp_dir}/tmp_parsed{title}"): 
+        return 
+
     bashCommand = f"wikiextractor {f} -o {parsed_tmp_dir}/tmp_parsed{title}"
 
     process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
@@ -366,10 +379,17 @@ def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
         if not os.path.isdir(f)
     ]
 
-    # create pool and run
-    p = Pool(workers)
-    p.starmap(extract, files)
-    p.close()
+    chunks = []
+    chunk_size = 10000
+
+    for i in range(0, len(files), chunk_size):
+
+        # create pool and run
+        p = Pool(workers)
+        p.starmap(extract, files[i:i+chunk_size])
+        p.close()
+
+        print("FINISHED ITERATION", i)
 
 
 # assign timesteps
@@ -645,7 +665,8 @@ if __name__ == "__main__":
     # directories
     data_dir = config["directory"]["data_dir"]
     revisions_dir = config["directory"]["revisions_dir"]
-    raw_doc_dir = config["directory"]["raw_doc_dir"]
+    #raw_doc_dir = config["directory"]["raw_doc_dir"]
+    raw_doc_dir = "/data/wooders/ralf-vldb/results/wikipedia/new_doc_xml"
     parsed_doc_dir = config["directory"]["parsed_doc_dir"]
     parsed_tmp_dir = config["directory"]["parsed_tmp_dir"]
     diff_dir = config["directory"]["diff_dir"]
@@ -697,7 +718,7 @@ if __name__ == "__main__":
             os.mkdir(parsed_doc_dir)
         if not os.path.exists(parsed_tmp_dir):
             os.mkdir(parsed_tmp_dir)
-        parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32)
+        parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=64)
 
     # get questions
     if args.run_get_questions:
