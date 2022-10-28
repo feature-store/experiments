@@ -9,13 +9,16 @@ from lxml import etree
 from tqdm import tqdm
  
 # def query_doc_versions(start_time="2022-10-01T02:45:57Z", end_time="2022-08-01T00:00:00Z", changes_dir="/data/devangjhabakh/wikipedia/wikipedia/recentchanges"):
-def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc_xml/", titles_file="/data/devangjhabakh/wikipedia/wikipedia/top_titles_1k.csv", start_time="2022-10-01T02:45:57Z", end_time="2022-08-01T00:00:00Z"):
+def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc_xml_3/", titles_file="/data/devangjhabakh/wikipedia/wikipedia/top_titles_1k.csv", start_time="2022-10-01T02:45:57Z", end_time="2022-08-01T00:00:00Z"):
     """
     Script to query the wikipedia API for recent edit IDS
     """
 
     top_titles = pd.read_csv(titles_file)
     titles = list(set(top_titles["title"].tolist()))
+    freq_dict = dict()
+    for ind in top_titles.index:
+        freq_dict[top_titles["title"][ind]] = top_titles["count"][ind]
 
     ## SET THESE
     #data_dir = "revisions/"
@@ -33,17 +36,12 @@ def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc
     }
     
     orig_start_time = start_time
-    completed_titles = set(os.listdir("/data/devangjhabakh/wikipedia/wikipedia/doc_xml/"))
-    # titles = [title.replace("/", "-").replace(" ", "-") for title in titles]
-    # all_titles = set(titles)
-    # print(len(all_titles))
-    # print(len(completed_titles))
-    # print(len(all_titles.difference(completed_titles)))
-    # to_do = all_titles.difference(completed_titles)
+    completed_titles = set(os.listdir(doc_xml_dir))
     dt_start = datetime.fromisoformat(start_time.replace("Z", ""))
     dt_end = datetime.fromisoformat(end_time.replace("Z", ""))
     try:
         for title in tqdm(titles):
+            PARAMS["limit"] = freq_dict[title]
             if title.replace("/", "-").replace(" ", "-") in completed_titles:
                 print("skipping title!")
                 print(title)
@@ -53,8 +51,7 @@ def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc
             dt_start = datetime.fromisoformat(start_time.replace("Z", ""))
             dt_end = datetime.fromisoformat(end_time.replace("Z", ""))
 
-            while dt_end < dt_start: 
-
+            while dt_end < dt_start:
                 PARAMS["pages"] = title
                 PARAMS["offset"] = dt_start.isoformat() + "Z"
 
@@ -101,13 +98,13 @@ def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc
                 # go through all the revisions
                 for i in (range(rev_start, len(page_child))):
                     revision = page_child[i]
-
+                    revision_id = [c for c in revision if c.tag == 'id'][0].text
                     curr_timestamp = [c for c in revision if c.tag == 'timestamp'][0].text
                     dt = datetime.fromisoformat(curr_timestamp.replace("Z", ""))
 
                     ## add beginning of xml
                     curr_bytes = bytes('<?xml version="1.0" ?>\n<page>\n', 'utf-8') \
-                                + bytes('<id>' + pg_id + '</id>\n', 'utf-8') \
+                                + bytes('<id>' + revision_id + '</id>\n', 'utf-8') \
                                 + bytes('<title>' + title + '</title>\n', 'utf-8') \
                                 + bytes('<ns>' + ns + '</ns>\n', 'utf-8') \
                                 + etree.tostring(revision, pretty_print=True) \
@@ -121,9 +118,8 @@ def query_doc_revisions(doc_xml_dir="/data/devangjhabakh/wikipedia/wikipedia/doc
                     # update timestamp
                     if dt < dt_start:
                         dt_start = dt
-                    else:
-                        break
 
+                
                 print("wrote to " + str(title))
     except Exception as e:
         f = open("log_file.txt", "a")
