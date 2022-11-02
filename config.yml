@@ -3,7 +3,6 @@ root_dir = /Users/sarahwooders/repos/experiments
 data_dir = %(root_dir)s/data
 results_dir = %(data_dir)s/results
 dataset_dir = %(data_dir)s/datasets
-plots_dir = %(data_dir)s/plots
 credentials = %(root_dir)s/ralf-vldb.json
 aws_dir = vldb
 aws_bucket = feature-store-datasets

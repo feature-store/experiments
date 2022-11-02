@@ -116,7 +116,9 @@ def generate_embeddings(model_file, diff_dir, embedding_dir):
     # loop through files
     index = 0
     # gpu = 2
-    for filename in tqdm(os.listdir(diff_dir)):
+    #for filename in tqdm(os.listdir(diff_dir)):
+    for filename in tqdm(list(os.listdir(diff_dir))[38000:]):
+        print(diff_dir)
 
         # index += 1
         # if index % 5 != gpu:
@@ -125,11 +127,19 @@ def generate_embeddings(model_file, diff_dir, embedding_dir):
         new_id = filename.replace(".json", "").split("_")[0]
         old_id = filename.replace(".json", "").split("_")[1]
 
+        print(filename)
+
         for revid in [new_id, old_id]:
 
-            data = json.load(open(os.path.join(diff_dir, filename)))
+            try:
+                data = json.load(open(os.path.join(diff_dir, filename)))
+            except Exception as e:
+                print(e)
+                print("load error", filename)
+                continue
 
             if len(data["diffs"]) == 0:
+                print("no diffs", filename)
                 continue
 
             if revid == data["orig_id"]:
@@ -151,3 +161,6 @@ def generate_embeddings(model_file, diff_dir, embedding_dir):
                     },
                     open(filepath, "wb"),
                 )
+            else: 
+                print("exists", filepath)
+                print(data["new_id"], data["orig_id"])

@@ -158,8 +158,8 @@ class Simulator:
         stream_edit_file = f"{dataset_dir}/edit_stream.json"
 
         self.tmp_dir = "/data/wooders/ralf-vldb/results/wikipedia/tmp"
-        self.embedding_dir = f"{result_dir}/embeddings"
-        self.rev_dir = f"{result_dir}/diffs"
+        self.embedding_dir = f"{result_dir}/swap_embeddings"
+        self.rev_dir = f"{result_dir}/diffs_new"
 
         # create model file
         model_file = f"{result_dir}/models/bert-base-encoder.cp"
@@ -251,6 +251,8 @@ class Simulator:
         revid_old = filename.replace(".json", "").split("_")[1]
         revid = filename.replace(".json", "").split("_")[0]
 
+        print("processs update", filename)
+
         # get updated embedding/passage data
         data = json.load(open(os.path.join(self.rev_dir, filename)))
         timestamp = data["timestamp"]
@@ -280,7 +282,7 @@ class Simulator:
         contex_file = f"{self.tmp_dir}/dpr_ctx_{revid}_{doc_id}"
         text_file = f"{self.tmp_dir}/passages_{revid}_{doc_id}.tsv"
 
-        if not os.path.exists(contex_file):
+        if True: #not os.path.exists(contex_file):
 
             text_df = pd.DataFrame(
                 [[i, passage_texts[i], "", doc_id] for i in range(len(passage_texts))]
@@ -303,7 +305,10 @@ class Simulator:
         plan_results = [] #defaultdict(list)
         updates = []
         budget = 0
-        for ts in range(len(self.questions)): 
+        #for ts in range(len(self.questions)): 
+        #steps = len(self.questions) 
+        steps = 10000
+        for ts in range(steps):
 
             # update budget
             budget += self.updates
@@ -354,10 +359,10 @@ class Simulator:
             self.queue.timestep()
 
 
-            if (len(plan_results) > 0 and len(plan_results) % 100 == 0) or ts == len(self.questions) - 1:
+            if (len(plan_results) > 0 and len(plan_results) % 100 == 0) or ts == steps - 1:
 
-                pd.DataFrame(plan_results).to_csv(f"{results_dir}/results_{self.policy}_{self.updates}.csv")
-                pd.DataFrame(updates).to_csv(f"{results_dir}/updates_{self.policy}_{self.updates}.csv")
+                pd.DataFrame(plan_results).to_csv(f"{results_dir}/step_{steps}_results_{self.policy}_{self.updates}.csv")
+                pd.DataFrame(updates).to_csv(f"{results_dir}/step_{steps}_updates_{self.policy}_{self.updates}.csv")
 
                 top1, top5, top10 = 0, 0, 0
                 doc_size = 0 
