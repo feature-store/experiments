@@ -1,4 +1,5 @@
 import os
+from bs4 import BeautifulSoup
 import time
 import pickle
 import json
@@ -272,6 +273,7 @@ def generate_diffs(
     title_to_rev_pairs = defaultdict(dict)
     for index, row in edits_df.iterrows():
         if row["title"] not in titles:
+            print("Not top title:", row["title"])
             continue  # skip if not top title
 
         # map title -> (revid, old_revid) -> timestamp of revision
@@ -287,7 +289,9 @@ def generate_diffs(
 
     inputs = []
     for title in tqdm(titles):
-        filename = os.path.join(parsed_doc_dir, f"{title}.pkl")
+        #pkl_title = title.replace(" ", "-").replace("/", "-")
+        pkl_title = title.replace("/", "-")
+        filename = os.path.join(parsed_doc_dir, f"{pkl_title}.pkl")
         if not os.path.exists(filename):
             print("missing", filename)
             continue
@@ -336,35 +340,43 @@ def dump_to_pickle_title(top_folder, target_dir, title):
 
             for doc in soup.find_all("doc"):
                 id = doc.get("id")
-                title = doc.get("title")
+                temp_title = doc.get("title")
                 url = doc.get("url")
                 text = doc.get_text()
-                docs.append({"id": id, "url": url, "title": title, "text": text})
+                docs.append({"id": id, "url": url, "title": temp_title, "text": text})
         total += len(docs)
     pickle.dump(docs, open(os.path.join(target_dir, title + ".pkl"), "wb"))
+
     return os.path.join(target_dir, title + ".pkl")
 
 
 # call wikiextractor library on XML
 def extract(title, raw_doc_dir, parsed_tmp_dir, parsed_doc_dir):
     title = title.replace(" ", "-").replace("/", "-")
+
+    #title = title.replace("\\ ", "-").replace(" ", "-").replace("\\", "-")
     f = f"{raw_doc_dir}/{title}"
 
     if not os.path.exists(f): 
         print("missing", f)
         return None
 
-    if os.path.exists("{parsed_tmp_dir}/tmp_parsed{title}"): 
-        return 
+    if os.path.exists(f"{parsed_tmp_dir}/tmp_parsed{title}"):
+        if len(os.listdir(f"{parsed_tmp_dir}/tmp_parsed{title}")) > 0: 
+
+            pkl_file = dump_to_pickle_title(
+                f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
+            )
+            #print("dump", parsed_doc_dir, title)
+            return 
+        else:
+            print("remove", f"{parsed_tmp_dir}/tmp_parsed{title}")
+            os.rmdir(f"{parsed_tmp_dir}/tmp_parsed{title}")
 
     bashCommand = f"wikiextractor {f} -o {parsed_tmp_dir}/tmp_parsed{title}"
 
     process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
     output, error = process.communicate()
-
-    pkl_file = dump_to_pickle_title(
-        f"{parsed_tmp_dir}/tmp_parsed{title}", parsed_doc_dir, title
-    )
 
 
 def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
@@ -442,6 +454,7 @@ def generate_simulation_data(
                 try:
                     data = json.load(open(file_path))
                     if len(data["diffs"]) == 0:
+                        #print("No diffs", file_path)
                         continue
                     diffs = data["diffs"][0]
                 except Exception as e:
@@ -471,7 +484,6 @@ def generate_simulation_data(
                 ts_edits[key].append(filename)
 
             else:
-                # print("missing", file_path)
                 continue
 
         for index, row in questions_df[questions_df["ts_min"] == ts].iterrows():
@@ -676,6 +688,7 @@ if __name__ == "__main__":
     model_file = config["files"]["model_file"]
     changes_file = config["files"]["changes_file"]
     titles_file = config["files"]["titles_file"]
+    print(titles_file)
     revisions_file = config["files"]["revisions_file"]
     edits_file = config["files"]["edits_file"]
     raw_questions_file = config["files"]["raw_questions_file"]
@@ -736,7 +749,7 @@ if __name__ == "__main__":
         # if not os.path.isdir(diff_dir):
         #    os.mkdir(diff_dir)
         generate_diffs(
-            edits_file, titles_file, parsed_doc_dir, diff_dir, revisions_file
+            edits_file, titles_file, parsed_doc_dir, diff_dir, revisions_file, workers=64
         )
 
     # generate simulation data
