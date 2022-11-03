@@ -1,5 +1,5 @@
 [directory]
-data_dir = /data/jeffcheng1234/wikipedia
+data_dir = /data/jeffcheng1234/wikipedia/wikipedia
 revisions_dir = %(data_dir)s/recentchanges
 raw_doc_dir = %(data_dir)s/doc_xml/
 parsed_doc_dir = %(data_dir)s/doc_pkl/
@@ -10,13 +10,13 @@ exp_dir  = %(data_dir)s/simulation_output/
 dpr_dir = /home/eecs/jeffcheng1234/DPR 
 
 [files]
-data_dir = /data/jeffcheng1234/wikipedia
-raw_questions_file = %(data_dir)s/10042021_questions_revid_filtered.csv
+data_dir = /data/jeffcheng1234/wikipedia/wikipedia
+raw_questions_file = %(data_dir)s/10062021_filtered_questions.csv
 model_file = %(data_dir)s/bert-base-encoder.cp
-changes_file = %(data_dir)s/changes.csv
-titles_file = %(data_dir)s/top_titles.csv
+changes_file = %(data_dir)s/changes_1k.csv
+titles_file = %(data_dir)s/top_titles_1k.csv
 revisions_file = %(data_dir)s/title_revisions_timestamps.json
-edits_file = %(data_dir)s/edits.csv
+edits_file = %(data_dir)s/edits_1k.csv
 questions_file = %(data_dir)s/questions.csv
 train_questions_file = %(data_dir)s/train_questions.csv
 test_questions_file = %(data_dir)s/test_questions.csv
@@ -25,8 +25,8 @@ pageview_file = %(data_dir)s/pageviews.csv
 timestamp_weights_file = %(data_dir)s/timestamp_weights_file.json
 
 [simulation]
-data_dir = /data/jeffcheng1234/wikipedia
-plan_dir = /data/jeffcheng1234/wiki-plans
+data_dir = /data/jeffcheng1234/wikipedia/wikipedia
+plan_dir = /data/jeffcheng1234/wikipedia/wiki-plans
 init_data_file = %(data_dir)s/init_data.json
 weights_dir = %(data_dir)s/weights
 optimal_plan_file = %(data_dir)s/optimal_plan.json
@@ -34,3 +34,6 @@ stream_edits_file = %(data_dir)s/edit_stream.json
 stream_questions_file = %(data_dir)s/question_stream.json
 
 
+[wiki_api_config]
+start_time=2022-10-01T02:45:57Z
+end_time=2022-08-01T00:00:00Z

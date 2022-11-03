@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 
 from multiprocessing import Pool
+from bs4 import BeautifulSoup
+from scipy.stats.mstats import winsorize
 
 # import wandb
 
@@ -27,14 +29,13 @@ from log_data import log_files, log_pageview, log_simulation, log_questions
 
 
 def query_recentchanges(start_time, end_time, revision_file):
-    from bs4 import BeautifulSoup
     pass
 
 
 def query_doc_versions(titles_file, start_time, end_time, raw_doc_dir):
     # TODO: query doc versions
     titles_df = pd.read_csv(titles_file)
-    titles = list(set(top_titles.index.tolist()))
+    titles = list(set(titles_df.index.tolist()))
     pass
 
 
@@ -76,7 +77,7 @@ def get_titles(changes_file, titles_file, n=200):
     title_ids = set(changes_df[["title", "pageid"]].apply(tuple, axis=1).tolist())
 
     counts = changes_df.title.value_counts().to_frame()
-    top_titles = counts.nlargest(10000, "title")
+    top_titles = counts.nlargest(n, "title")
     print(top_titles)
     top_titles.columns = ["count"]
     top_titles["title"] = top_titles.index
@@ -114,7 +115,7 @@ def get_questions(raw_questions_file, questions_file):
     ]
 
     # assign timestamps
-    questions_df["ts_min"] = (
+    qdf["ts_min"] = (
         pd.to_datetime(questions_df["datetime"])
         .astype(np.int64)
         .apply(assign_timestamps_min)
@@ -124,6 +125,10 @@ def get_questions(raw_questions_file, questions_file):
     questions_df.to_csv(questions_file)
     return questions_df
 
+def get_raw_pageviews(raw_pageview_file, titles_file, start_time, end_time):
+    from wiki_api.query_pageviews_api import query_pageviews
+    query_pageviews(raw_pageview_file, titles_file, start_time, end_time) 
+
 def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file): 
 
     edits_df = pd.read_csv(edits_file)
@@ -132,13 +137,27 @@ def get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weight
     # map title -> id
     title_to_id = edits_df.set_index("title")["pageid"].to_dict()
     open("title_to_id.json", "w").write(json.dumps(title_to_id))
-    
+
+    # get edit counts for each page
+    edit_counts_df = edits_df.groupby("title").size()
+    pageview_df['edit_count'] = list(edit_counts_df[pageview_df["title"]])
+    cols = pageview_df.columns.tolist()
+    pageview_df = pageview_df[cols[:1] + cols[-1:] + cols[1:-1]]
+
+    # scale down the outliers with its square root and clip the 10th and 60th percentile values 
+    # with winsorization to ensure some visits without skewing the distribution too much
+    for c in pageview_df.columns.tolist()[2:]:
+        pageview_df[c] = (pageview_df[c] ** 0.5).astype(int)
+        pageview_df[c] = winsorize(pageview_df[c], limits=[0.2, 0.05])
+
     # calculate page weights
     total_views = pageview_df.iloc[:, 2:].sum(axis=1).sum()
     weights = pageview_df.iloc[:, 2:].sum(axis=1) / total_views 
     pageview_df['weights'] = weights
     pageview_df['doc_id'] = pageview_df['title'].apply(lambda x: title_to_id[x])
-    pageview_df.to_csv(pageview_file)
+        
+    # pageview_df = pageview_df.drop(columns=["Unnamed: 0"])
+    pageview_df 
 
     # page weights per timestamp
     ts_to_weights = {}
@@ -360,8 +379,6 @@ def parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32):
         if not os.path.isdir(f)
     ]
     
-    workers = 1
-
     # create pool and run
     p = Pool(workers)
     p.starmap(extract, files)
@@ -622,6 +639,7 @@ if __name__ == "__main__":
         "--run_parse_docs", action="store_true", default=False
     )  # re-parse document versions
     parser.add_argument("--run_get_questions", action="store_true", default=False)
+    parser.add_argument("--run_get_raw_pageviews", action="store_true", default=False)
     parser.add_argument("--run_get_pageviews", action="store_true", default=False)
     parser.add_argument(
         "--run_generate_diffs", action="store_true", default=False
@@ -694,17 +712,6 @@ if __name__ == "__main__":
             os.mkdir(parsed_tmp_dir)
         parse_docs(raw_doc_dir, parsed_tmp_dir, parsed_doc_dir, workers=32)
 
-    # get question -- requires kevin's question CSVs
-    if args.run_get_questions:
-        questions_df = get_questions(raw_questions_file, questions_file)
-        print("Generated questions file", raw_questions_file, questions_file)
-        # log_questions(run, config)
-
-    # generate pageviews / compute page weights
-    # if args.run_get_pageviews:
-    #    get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
-    #    log_pageview(run, config)
-
     # generate diffs between document versions
     if args.run_generate_diffs:
         # if not os.path.isdir(diff_dir):
@@ -712,6 +719,20 @@ if __name__ == "__main__":
         generate_diffs(
             edits_file, titles_file, parsed_doc_dir, diff_dir, revisions_file
         )
+
+    if args.run_get_raw_pageviews:
+        get_raw_pageviews(raw_pageview_file, titles_file, "2021-09-04T02:45:57Z", "2021-08-05T02:45:57Z")
+
+    # generate pageviews / compute page weights
+    if args.run_get_pageviews:
+       get_pageviews(raw_pageview_file, pageview_file, edits_file, timestamp_weights_file)
+    #    log_pageview(run, config)
+
+    # get question -- requires kevin's question CSVs
+    if args.run_get_questions:
+        questions_df = get_questions(raw_questions_file, questions_file)
+        print("Generated questions file", raw_questions_file, questions_file)
+        # log_questions(run, config)
 
     # generate simulation data
     if args.run_generate_simulation_data:

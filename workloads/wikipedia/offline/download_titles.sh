@@ -1,0 +1,1 @@
+aws s3 cp s3://feature-store-datasets/wikipedia/top_title_views.csv ${data_dir}/top_title

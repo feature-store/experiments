@@ -4,14 +4,14 @@ from datetime import datetime
 import os
 import json
  
-def query_recent_changes(start_time="2022-10-01T02:45:57Z", end_time="2022-08-01T00:00:00Z", changes_dir="/data/devangjhabakh/wikipedia/wikipedia/recentchanges"):
+def query_recent_changes(start_time="2022-10-01T02:45:57Z", end_time="2022-08-01T00:00:00Z", changes_dir="/data/jeffcheng1234/wikipedia/wikipedia/recentchanges"):
     """
     Script to query the wikipedia API for recent edit IDS
     """
 
     ## SET THESE
     #data_dir = "revisions/"
-    data_dir = "/data/devangjhabakh/wikipedia/wikipedia/recentchanges"
+    data_dir = "/data/jeffcheng1234/wikipedia/wikipedia/recentchanges"
 
     # setup API 
     S = requests.Session()
@@ -33,8 +33,8 @@ def query_recent_changes(start_time="2022-10-01T02:45:57Z", end_time="2022-08-01
     }
     
     orig_start_time = start_time
-    dt_start = datetime.fromisoformat(start_time.replace("Z", ""))
-    dt_end = datetime.fromisoformat(end_time.replace("Z", ""))
+    dt_start = datetime.strptime(start_time.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+    dt_end = datetime.strptime(end_time.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
 
     revisions = []
     while dt_end < dt_start: 
@@ -56,7 +56,7 @@ def query_recent_changes(start_time="2022-10-01T02:45:57Z", end_time="2022-08-01
         for change in changes:
 
             # note - "revid" should equal "parentid" for some later diff
-            dt = datetime.fromisoformat(change["timestamp"].replace("Z", ""))
+            dt = datetime.strptime(change["timestamp"].replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
 
             # add to list of revisions
             revisions.append(change)

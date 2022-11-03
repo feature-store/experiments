@@ -12,7 +12,7 @@ Script to query all the document content version in a given time period
 # SET THESE
 titles_df = pd.read_csv("titles.csv")
 titles = titles_df["title"].tolist()
-data_dir = "/data/devangjhabakh/wikipedia/wikipedia/revisions/"
+data_dir = "/data/jeffcheng1234/wikipedia/wikipedia/revisions/"
 print("num titles", len(titles))
 
  
