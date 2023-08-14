@@ -1,4 +1,5 @@
 import json 
+import pickle
 import random
 import time
 from collections import defaultdict
@@ -37,7 +38,13 @@ flags.DEFINE_integer(
     default=700,
     help="Length of time-series"
 )
-def simulate(data, start_ts, runtime, policy):
+flags.DEFINE_string(
+    "query_dist", 
+    default="uniform", 
+    help="Distribution of queries over time"
+) 
+
+def simulate(data, start_ts, runtime, policy, query_dist):
     """
     Simulate streaming computation with given runtime and policy 
 
@@ -45,6 +52,7 @@ def simulate(data, start_ts, runtime, policy):
     :start_ts: timestamp (i.e. index) to start at
     :runtime: runtime of map function 
     :policy: policy to select keys 
+    :query_dist: distribution of queries
     """
 
     predictions = defaultdict(list)
@@ -52,6 +60,28 @@ def simulate(data, start_ts, runtime, policy):
     staleness = defaultdict(list)
     score = [0 for i in range(1, FLAGS.num_keys+1, 1)]
     update_times = defaultdict(list)
+
+
+    # setup query distributions 
+    num_queries = None # num_queries[user_id][ts] = # queries made by that user
+    if query_dist == "poisson": 
+        num_keys_queried = num_queries = np.random.poisson(int(FLAGS.num_keys/2), [FLAGS.max_len])
+        #num_queries = np.random.poisson(1, [FLAGS.num_keys + 1, FLAGS.max_len])
+        num_queries = np.empty([FLAGS.num_keys + 1, FLAGS.max_len])
+        print("queries", num_keys_queried)
+        num_queries.fill(0)
+        for t in range(FLAGS.max_len):
+            # sample number of keys from keys
+            n = min(num_keys_queried[t], FLAGS.num_keys - 1)
+            keys = random.sample(range(FLAGS.num_keys), n) 
+
+            # mark queried keys
+            for k in keys: 
+                num_queries[k][t] = 1
+    else: 
+        # default: uniform number of queries across all keys
+        num_queries = np.empty([FLAGS.num_keys + 1, FLAGS.max_len])
+        num_queries.fill(1)
    
     # start with initial set of models
     last_model = {}
@@ -66,28 +96,30 @@ def simulate(data, start_ts, runtime, policy):
 
         # run predictions per key 
         for key in last_model.keys(): 
-            last_time = last_model[key]["time"]
-            predictions[key].append(last_model[key]["forecast"][ts-last_time])
-            values[key].append(float(data[key][ts]))
-            staleness[key].append(ts-last_time)
 
-            # policy scoring
-            t = ts - last_time
-            if policy == "total_error" and len(predictions[key]) > 1 and t > 1: 
-                e = mean_absolute_scaled_error(
-                    np.array(values[key][-t:]), 
-                    np.array(predictions[key][-t:]), 
-                    y_train=np.array(values[key][-t:]), 
-                    sp=1
-                )
-                score[key-1] = e * t # use total, not mean 
-            elif policy == "round_robin" or policy == "random": 
-                score[key-1] += 1
-            elif policy == "max_staleness": 
-                score[key-1] = ts-last_time
+            # loop through queries 
+            for query in range(int(num_queries[key][ts])):
+                last_time = last_model[key]["time"]
+                predictions[key].append(last_model[key]["forecast"][ts-last_time])
+                values[key].append(float(data[key][ts]))
+                staleness[key].append(ts-last_time)
+
+                # policy scoring
+                t = ts - last_time
+                if policy == "total_error" and len(predictions[key]) > 1 and t > 1: 
+                    e = mean_absolute_scaled_error(
+                        np.array(values[key][-t:]), 
+                        np.array(predictions[key][-t:]), 
+                        y_train=np.array(values[key][-t:]), 
+                        sp=1
+                    )
+                    score[key-1] += e * t # use total, not mean 
+                elif policy == "round_robin" or policy == "random": 
+                    score[key-1] += 1
+                elif policy == "max_staleness": 
+                    score[key-1] = ts-last_time
 
         if policy == "batch": 
-            print(ts - last_update_time, runtime, len(score))
             if (ts - last_update_time) / runtime >= len(score): 
 
                 # update all keys
@@ -122,8 +154,6 @@ def simulate(data, start_ts, runtime, policy):
                 
                 # update next update time 
                 next_update_time += runtime
-
-        print(policy, update_times.keys())
 
     results_df = pd.concat([
         pd.DataFrame({
@@ -186,21 +216,28 @@ def read_data(dataset_dir):
     :dataset_dir: dir containing CSV files
     """
 
+    if os.path.exists("data_cache.pkl"): 
+        return pickle.load(open("data_cache.pkl", "rb"))
+
     data = {}
     for i in tqdm(range(1, FLAGS.num_keys+1)):
-        df = remove_anomaly(pd.read_csv(f"{dataset_dir}/{i}.csv"))
+        filename = f"{dataset_dir}/{i}.csv"
+        d = pd.read_csv(filename)
+        df = remove_anomaly(d)
         assert len(df.index) >= FLAGS.max_len, f"Dataset size too small {len(df.index)}"
         arr = df.value.values 
         data[i] = arr 
+
+    pickle.dump(data, open("data_cache.pkl", "wb"))
     return data
 
 def main(argv):
     #runtime = [24, 12, 4, 2, 1, 0]
     #runtime = [4, 6, 8, 12, 24] #[1, 2, 3]
-    policy = ["random"] #, "round_robin", "total_error", "batch"]
-    #runtime = [0, 1000000]
+    policy = ["random", "round_robin", "total_error", "batch"]
+    query_dist = ["poisson"] #, "uniform"]
     #runtime = [0.05, 0.02, 0.5, 0.2, 0.1]
-    runtime = [0.5, 0.2, 0.1, 1, 2, 3, 4, 6, 8, 12, 24]
+    runtime = [0.5, 0.2, 0.1, 1, 2, 3, 4, 6, 8, 12, 24] + [0, 1000000]
     name = f"yahoo_A1_window_{FLAGS.window_size}_keys_{FLAGS.num_keys}_length_{FLAGS.max_len}"
 
     result_dir = use_results(name)
@@ -215,42 +252,44 @@ def main(argv):
     
     for r in runtime: 
         for p in policy: 
+            for d in query_dist:
 
-            try:
-                update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p)
-            except Exception as e:
-                print(e) 
-                continue
-            e = error(df)
-            s = df.staleness.mean()
-            u = sum([len(v) for v in update_times.values()])
+                try:
+                    update_times, df = simulate(data, start_ts=FLAGS.window_size, runtime=r, policy=p, query_dist=d)
+                except Exception as e:
+                    print(e) 
+                    raise e
+                    #continue
+                e = error(df)
+                s = df.staleness.mean()
+                u = sum([len(v) for v in update_times.values()])
            
-            r_df = pd.DataFrame([[r, p, e, s, u]])
-            r_df.columns = ["runtime", "policy", "total_error", "average_staleness", "total_updates"]
-            u_df = pd.DataFrame([
-                [r, p, k, i, update_times[k][i]]
-                for k, v in update_times.items() for i in range(len(v))
-            ])
+                r_df = pd.DataFrame([[r, p, d, e, s, u]])
+                r_df.columns = ["runtime", "policy", "query_dist", "total_error", "average_staleness", "total_updates"]
+                u_df = pd.DataFrame([
+                    [r, p, d, k, i, update_times[k][i]] for k, v in update_times.items() for i in range(len(v))
+                ])
            
-            # write experiment CSV
-            folder = f"{p}_{r}_A1"
-            os.makedirs(f"{result_dir}/{folder}", exist_ok=True)
-            df.to_csv(f"{result_dir}/{folder}/simulation_predictions.csv")
-            r_df.to_csv(f"{result_dir}/{folder}/simulation_result.csv")
-            u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
-            print(u_df)
-            u_df.columns = ["runtime", "policy", "key", "i", "time"]
-            u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
+                # write experiment CSV
+                folder = f"{p}_{r}_{d}_A1"
+                os.makedirs(f"{result_dir}/{folder}", exist_ok=True)
+                df.to_csv(f"{result_dir}/{folder}/simulation_predictions.csv")
+                r_df.to_csv(f"{result_dir}/{folder}/simulation_result.csv")
+                u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
+                print(u_df)
+                u_df.columns = ["runtime", "policy", "query_dist", "key", "i", "time"]
+                u_df.to_csv(f"{result_dir}/{folder}/simulation_update_time.csv")
            
-            # aggregate data 
-            df_all = pd.concat([df_all, df])
-            results_df = pd.concat([results_df, r_df])
-            updates_df = pd.concat([updates_df, u_df])
-            print("done", folder)
+                # aggregate data 
+                df_all = pd.concat([df_all, df])
+                results_df = pd.concat([results_df, r_df])
+                updates_df = pd.concat([updates_df, u_df])
+                print("done", folder)
 
 	
             
-    results_df.to_csv(f"{result_dir}/simulation_results.csv")
+                results_df.to_csv(f"{result_dir}/results.csv")
+                updates_df.to_csv(f"{result_dir}/updates.csv")
     while True:
         try:
             log_results(name)

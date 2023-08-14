@@ -17,6 +17,7 @@ terraform output -json > config.json;
 ```
 
 ## Experiments 
+First, update `config.yml` to point to the correct directories. 
 
 ### recsys (ALS) 
 1. Train a model with `python workloads/recsys/train_als.py`. Make sure the split/dataset is set to what you want. 
@@ -39,6 +40,13 @@ python workloads/recsys/stream_als.py \
 ```
 
 3. Evaluate in `nb/als-plots.ipynb`
+
+### anomaly detection (STL) 
+1. Run streaming inference/updates.
+
+```
+python workloads/stl/stream_simulation.py
+```
 
 
 ## Repository structure 
