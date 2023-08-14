@@ -16,7 +16,7 @@ def send_to_kafka(queue):
     #producer = KafkaProducer(security_protocol="SSL", bootstrap_servers=os.environ.get('KAFKA_HOST', 'localhost:9092'))
     producer = KafkaProducer(
         bootstrap_servers="localhost:9092",
-        value_serializer=lambda v: pickle.dumps(v)
+        value_serializer=lambda v: json.dumps(v).encode("utf-8")
     )
 
     azure_database = "/home/ubuntu/cleaned_sqlite_3_days_min_ts.db"
@@ -91,10 +91,14 @@ def send_to_kafka(queue):
 
 # Function for Process 2
 def listen_results(queue):
+
+    def deserialize(data): 
+        return json.loads(data.decode("utf-8"))
+
     consumer = KafkaConsumer(
-        "records",
+        "output",
         bootstrap_servers="localhost:9092",
-        value_deserializer=pickle.loads
+        value_deserializer=deserialize,
     )
     for message in consumer:
         queue.put(message.value)
