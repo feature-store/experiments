@@ -50,7 +50,7 @@ def send_to_kafka(queue):
                     try:
                         res = producer.send(
                             "records",
-                            value = {"key": int_id, "value": avg_cpu, "ts": ts}
+                            value = {"key": int_id, "cpu": avg_cpu, "ts": ts}
                         )
                     except Exception as e:
                         print("ERROR", e, repr(e))
