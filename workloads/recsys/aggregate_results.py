@@ -20,7 +20,7 @@ updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8, None, 10000] #, 3, 4, 5, 8]
 ts_factor = [60] #, 60*60, 60*60*24]
 policies = ["random", "total_error_cold", "query_proportional", "max_pending", "min_past", "round_robin", "batch"] #, "last_query"]
 dist = ["exponential", "gaussian", None]
-limit = 10000
+limit = 100000
 
 stream_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
 start_ts = stream_df.timestamp.min()

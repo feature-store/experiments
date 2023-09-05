@@ -403,7 +403,7 @@ def main(argv):
     #ts_factors = [10, 100]
     ts_factors = [60] #, 60*60, 60*60*24]
 
-    dists = ["exponential", "gaussian"] #, None]
+    dists = [None] #"exponential", "gaussian"] #, None]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []
