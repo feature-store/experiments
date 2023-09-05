@@ -59,19 +59,17 @@ if __name__ == "__main__":
     dataset_dir = use_dataset(experiment)
     result_dir = use_results(experiment, download=False)
 
-    splits = [0.5] 
+    splits = [0.5, 0.75] 
     dists = ["gaussian", "exponential"] 
 
     for split in splits: 
         for dist in dists: 
             test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
-            train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
+
+            # filter out 
+            test_df = test_df[test_df["timestamp"] < 977e6]
             
             updated_test_df = reset_timestamps(test_df) 
-            updated_train_df = reset_timestamps(train_df) 
-
-
             updated_test_df.to_csv(f'{dataset_dir}/stream_{split}_{dist}.csv')
-            updated_train_df.to_csv(f'{dataset_dir}/train_{split}_{dist}.csv')
     
 

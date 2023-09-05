@@ -54,6 +54,8 @@ def download_dir(name, source_dir, target_dir):
 
     for obj in objs['Contents']: 
         key = obj['Key']
+        if key == f"{source_dir}/{name}/": 
+            continue
         target = target_dir + key.replace(source_dir, "")
         os.makedirs(os.path.dirname(target), exist_ok=True)
         s3.download_file("feature-store-datasets", key, target)

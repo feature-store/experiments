@@ -230,20 +230,20 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
 
 
     # create/clear runtime file
-    runtime_file = f"{result_dir}/runtimes.txt"
-    open(runtime_file, "w").close()
-    print(runtime_file)
+    runtime_file = None #f"{result_dir}/runtimes.txt"
+    if runtime_file is not None:
+        open(runtime_file, "w").close()
+        print(runtime_file)
 
     # read data 
     if dist: 
         test_df = pd.read_csv(f'{dataset_dir}/stream_{split}_{dist}.csv')
-        train_df = pd.read_csv(f'{dataset_dir}/train_{split}_{dist}.csv')
     else:
         test_df = pd.read_csv(f'{dataset_dir}/stream_{split}.csv')
-        train_df = pd.read_csv(f'{dataset_dir}/train_{split}.csv')
     start_ts = test_df.timestamp.min()
     test_df.timestamp = test_df.timestamp.apply(lambda ts: int((ts - start_ts)/ts_factor))
     data = {}
+    print("setting up experiment", policy,  d, split, dist)
     #for ts, group in tqdm(test_df.groupby("timestamp")):
     for ts, group in test_df.groupby("timestamp"):
         data[ts] = group.to_dict("records")
@@ -280,7 +280,7 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     #for ts in tqdm(list(data.keys())[:limit]): 
     next_ts = 0
     update_budget = 0
-    for ts in list(data.keys())[:limit]: 
+    for ts in tqdm(list(data.keys())[:limit]): 
 
         # process events
         updated_users = set([])
@@ -349,11 +349,11 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     
 
             if not dist: 
-                print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
+                print("saving", {ts}, limit, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
                 update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
                 results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
             else: 
-                print("saving", {ts}, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_results.csv")
+                print("saving", {ts}, limit, f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_results.csv")
                 update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_updates.csv")
                 results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_results.csv")
 
@@ -369,9 +369,11 @@ def experiment(policy, updates_per_ts, ts_factor, dataset_dir=".", result_dir=".
     if not dist:
         update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_updates.csv")
         results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv")
+        return f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_results.csv"
     else:
         update_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_updates.csv")
         results_df.to_csv(f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_results.csv")
+        return f"{result_dir}/{policy}_{updates_per_ts}_{ts_factor}_split_{split}_dist_{dist}_results.csv"
 
 
 def main(argv):
@@ -385,27 +387,36 @@ def main(argv):
 
     workers = FLAGS.workers
 
-    limit = None
+    limit = 100000 #int(977e6)
+    print(limit)
     
-    policies = ["round_robin", "query_proportional", "total_error_cold", "max_pending", "min_past", "round_robin", "batch"]
+    policies = ["random", "total_error_cold", "query_proportional", "max_pending", "min_past", "round_robin"] #, "last_query"]
+    #policies = ["total_error_cold", "min_past"]
+    #policies = ["round_robin"]
     #policies = ["batch"]
     #updates_per_ts = [7] #[100000] #[0.5, 0.2, None]
     #updates_per_ts = [None, 10000] #[4, 8, 16] #[100000] #[0.5, 0.2, None]
-    updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8]
+    #updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, 5, 8, None, 10000]
+    updates_per_ts = [0.5, 0.25, 0.2, 1, 2, 3, 4, None, 10000]
     #updates_per_ts = [3]
     #ts_factors = [60, 60*60, 60*60*24]
     #ts_factors = [10, 100]
     ts_factors = [60] #, 60*60, 60*60*24]
 
-    dists = ["exponential", "gaussian", None]
+    dists = ["exponential", "gaussian"] #, None]
     
     #experiments = [(p, u, ".") for p in policies for u in updates_per_ts]
     futures = []
     with concurrent.futures.ProcessPoolExecutor(workers) as executor:
-        for p in policies: 
-            for u in updates_per_ts: 
-                for ts_factor in ts_factors:
+        for u in updates_per_ts: 
+            for ts_factor in ts_factors:
+                for p in policies: 
                     for dist in dists: 
+
+                        # only run baseline policies with round-robin
+                        if p != "round_robin" and (updates_per_ts == None or updates_per_ts == 10000): 
+                            continue
+
                         futures.append(executor.submit(experiment, p, u, ts_factor, dataset_dir,  result_dir, limit, d=d, split=split, dist=dist))
          
         for f in futures: 
@@ -413,6 +424,7 @@ def main(argv):
                 f.result()
             except Exception as e:
                 print(e)
+                raise e
         res = concurrent.futures.wait(futures)
         executor.shutdown()
     

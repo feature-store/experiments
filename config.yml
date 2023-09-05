@@ -4,6 +4,6 @@ data_dir = %(root_dir)s
 results_dir = %(data_dir)s/results
 dataset_dir = %(data_dir)s/datasets
 plots_dir = %(data_dir)s/plots
-credentials = ralf-vldb.json
+credentials = /home/eecs/wooders/experiments/ralf-vldb.json
 aws_dir = vldb
 aws_bucket = feature-store-datasets
