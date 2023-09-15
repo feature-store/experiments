@@ -10,7 +10,7 @@ from typing import List
 def read_config(): 
     config = configparser.ConfigParser()
     # TODO: change
-    config.read("/home/eecs/wooders/experiments/config.yml")
+    config.read("/Users/sarahwooders/repos/experiments/config.yml")
     return { 
         "results_dir": config["DEFAULT"]["results_dir"], 
         "dataset_dir": config["DEFAULT"]["dataset_dir"], 
