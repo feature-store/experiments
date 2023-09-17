@@ -11,12 +11,13 @@ def read_config():
     config = configparser.ConfigParser()
     # TODO: change
     config.read("/home/ubuntu/experiments/config.yml")
+    config.read("/Users/sarahwooders/repos/experiments/config.yml")
     return { 
-        "results_dir": config["default"]["results_dir"], 
-        "dataset_dir": config["default"]["dataset_dir"], 
-        "plots_dir": config["default"]["plots_dir"], 
-        "aws_dir": config["default"]["aws_dir"],
-        "credentials": config["default"]["credentials"]
+        "results_dir": config["DEFAULT"]["results_dir"], 
+        "dataset_dir": config["DEFAULT"]["dataset_dir"], 
+        "plots_dir": config["DEFAULT"]["plots_dir"], 
+        "aws_dir": config["DEFAULT"]["aws_dir"],
+        "credentials": config["DEFAULT"]["credentials"]
     }
 
 def read_credentials(): 
@@ -54,6 +55,8 @@ def download_dir(name, source_dir, target_dir):
 
     for obj in objs['Contents']: 
         key = obj['Key']
+        if key == f"{source_dir}/{name}/": 
+            continue
         target = target_dir + key.replace(source_dir, "")
         os.makedirs(os.path.dirname(target), exist_ok=True)
         s3.download_file("feature-store-datasets", key, target)
