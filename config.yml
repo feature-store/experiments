@@ -1,5 +1,5 @@
 [default] 
-root_dir = /Users/sarahwooders/repos/experiments 
+root_dir = /home/ubuntu/experiments 
 data_dir = %(root_dir)s/data
 plots_dir  = %(data_dir)s/plots
 results_dir = %(data_dir)s/results

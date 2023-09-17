@@ -44,6 +44,7 @@ flags.DEFINE_integer(
 
 def main(argv):
     raw_data_dir = use_dataset("azure", download=False)
+    print(raw_data_dir)
     data_dir = f"{raw_data_dir}/azure_{FLAGS.num_keys}"
     key_dir = f"{raw_data_dir}/key_data"
 
@@ -77,7 +78,7 @@ def main(argv):
 
     os.makedirs(data_dir, exist_ok=True)
 
-    json.dump({keys[i]: i for i in key_index}, open(f"{data_dir}/keys.json", "w"))
+    json.dump({keys[i]: i for i in key_index}, open(f"{data_dir}/keys_{FLAGS.num_keys}.json", "w"))
 
 
     
