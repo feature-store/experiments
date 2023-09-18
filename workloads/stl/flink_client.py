@@ -1,4 +1,6 @@
 import pickle
+from workloads.util import read_config, use_dataset, log_dataset
+import sys
 from workloads.util import log_results
 import pandas as pd
 import json
@@ -20,6 +22,7 @@ from multiprocessing import Queue
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("slide", default=1, required=False, help="Slide size")
+flags.DEFINE_integer("keys", default=1, required=False, help="Slide size")
 
 
 def send_to_kafka(queue, slide):
@@ -33,13 +36,25 @@ def send_to_kafka(queue, slide):
     conn = sqlite3.connect(azure_database)
     conn = sqlite3.connect(azure_database)
 
-    keys = list(json.load(open("/home/ubuntu/keys.json", "r")).values())
-    keys_selection_clause = ",".join(map(str, keys))
-    print(keys_selection_clause)
+    dataset_dir = use_dataset("azure")
+    #key_file = f"{dataset_dir}/azure_{FLAGS.keys}/keys_{FLAGS.keys}.json"
+    #print(key_file)
+    #keys = list(json.load(open(key_file, "r")).values())
+    #keys_selection_clause = ",".join(map(str, keys))
+    #print(keys_selection_clause)
+
     st = time.time()
+    #cursor = conn.execute(
+    #    "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
+    #    f"int_id in ({keys_selection_clause})"
+    #)
+
     cursor = conn.execute(
-        "SELECT timestamp, int_id, avg_cpu FROM readings WHERE "
-        f"int_id in ({keys_selection_clause})"
+        f"SELECT timestamp, int_id, avg_cpu FROM readings WHERE int_id IN ("
+        f"SELECT int_id FROM ("
+        f"SELECT int_id, COUNT(*) AS int_id_count FROM readings "
+        f"GROUP BY int_id ORDER BY int_id_count DESC LIMIT {FLAGS.keys}"
+        f") AS top_int_ids)"
     )
     print("Query completed", time.time() - st)
 
@@ -49,7 +64,15 @@ def send_to_kafka(queue, slide):
 
 
     results = []
-    for ts, data in tqdm(sorted(data_buffer.items())): 
+    sent_data = []
+    for data in data_buffer.values(): 
+        sent_data += [{"key": int_id, "cpu": avg_cpu, "ts": t} for (int_id, avg_cpu, t) in data]
+    pd.DataFrame(sent_data).to_csv(f"sent_data_{slide}_{FLAGS.keys}.csv")
+
+    # run experiment 
+    for ts, data in tqdm(sorted(data_buffer.items())):  
+
+        # timestamp is every 5 minutes in Azure
 
         for r in data: 
             assert r[2] == ts, f"Incorrect timestamp {data}"
@@ -57,7 +80,6 @@ def send_to_kafka(queue, slide):
         with ThreadPoolExecutor(max_workers=1) as executor:
             
             def send_data_helper(records):
-                #print(f"Sending {len(records)} records")
                 #for r in records:
                 #    print(r)
                 for (int_id, avg_cpu, t) in records:
@@ -71,10 +93,11 @@ def send_to_kafka(queue, slide):
                         import traceback 
                         traceback.print_exc()
                         raise e
+            #print(f"Sending {len(data)} records for {FLAGS.keys} keys")
             executor.submit(send_data_helper, data)
 
 
-            wait_time = 0.1
+            wait_time = 0.3 # send at 1000x original speed
             st = time.time()
 
             # check queue for processed data
@@ -92,7 +115,7 @@ def send_to_kafka(queue, slide):
         # TODO: pop from queue and determine max size
 
     df = pd.DataFrame(results)
-    df.to_csv(f"results_{slide}.csv")
+    df.to_csv(f"results_{slide}_{FLAGS.keys}.csv")
     print("finished", f"results_{slide}.csv")
     producer.close()
 
@@ -154,7 +177,7 @@ def main(argv):
     p2.start()
 
     p1.join() # only wait for p1 
-    sys.exit(0)
+    p2.kill()
 
 if __name__ == "__main__":
     app.run(main)

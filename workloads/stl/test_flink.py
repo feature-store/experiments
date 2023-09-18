@@ -27,7 +27,7 @@ from pyflink.table.udf import udtaf, TableAggregateFunction
 from kafka import KafkaProducer
 
 #SEASONALITY = 24*60
-SEASONALITY = 24*60
+SEASONALITY = 288 #24*60/5 #int(24*60/5)
 WINDOW_SIZE = SEASONALITY*3 
 
 FLAGS = flags.FLAGS
@@ -54,10 +54,14 @@ class Top2(TableAggregateFunction):
                 df = df.set_index("ts")
                 data = df.values.flatten() #.to_numpy()
 
+                import time
+                st = time.time()
+
                 model = STLForecast(
                     data, ARIMA, model_kwargs=dict(order=(1, 1, 0), trend="t"), period=SEASONALITY
                 ).fit()
                 self.window[key] = self.window[key][self.slide_size:]
+                print(key, max(times), time.time() - st)
                 yield Row(max(times))
             #else: 
             #    print("wrong size", len(window)) #%, self.keys, self.values)
@@ -86,7 +90,7 @@ def log_processing(argv):
     kafka_jar = "/home/ubuntu/experiments/flink-1.17.1/lib/flink-sql-connector-kafka-1.17.1.jar"
 
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_parallelism(8)
+    env.set_parallelism(1)
     env.add_jars(f"file://{kafka_jar}")
     t_env = StreamTableEnvironment.create(stream_execution_environment=env)
     t_env.get_config().set("pipeline.jars", f"file://{kafka_jar}")
